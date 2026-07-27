@@ -70,3 +70,237 @@ fm_platform_enable_native_symlinks() {
 # caller's first `ln -s`, and leaving it to each caller to remember is exactly
 # the kind of omission that reintroduces silent state corruption.
 fm_platform_enable_native_symlinks
+
+# --- Windows process introspection -------------------------------------------
+#
+# The harness-ancestry walk cannot use MSYS ps on Windows. Measured on Git Bash
+# (MINGW64), with the harness running as a native claude.exe:
+#
+#   * plain `ps` lists only MSYS processes - three of them - and reports this
+#     shell's PPID as 1. The harness is simply absent from the table.
+#   * `ps -W` does list Windows processes (408 rows here), but 407 of the 408
+#     carry PPID=0. It offers visibility without parentage.
+#   * four separate claude.exe processes were running at measurement time. Only
+#     one was this session's. Matching on name alone cannot tell them apart, and
+#     AGENTS.md section 5 forbids claiming ownership by name sweep.
+#   * `kill -0 <winpid>` fails for a Windows pid, because MSYS kill speaks MSYS
+#     pids. Liveness needs its own Windows-aware path.
+#
+# So parentage comes from the Windows process table (one bulk snapshot, walked
+# locally), while liveness and image name come from `ps -W`, which is cheaper and
+# sufficient once the pid is already known.
+#
+# Cost, measured: one bulk snapshot is 346ms via wmic and 633ms via PowerShell
+# CIM, against 1166ms for a per-hop PowerShell walk. wmic is preferred for speed
+# and PowerShell is the durable fallback, because Microsoft is removing wmic.
+#
+# NOT cached across process invocations, deliberately. The snapshot is cached for
+# the lifetime of one shell, which is what the multi-hop walk needs. Persisting a
+# resolved harness pid to disk would invite pid-reuse staleness in the code path
+# that decides session-lock ownership, and that risk is not worth paying before
+# measurement shows the per-invocation cost actually hurts.
+
+# Windows pid of an MSYS pid. MSYS `ps` is authoritative here: it is the only
+# thing that knows the mapping between its own pid space and Windows'.
+fm_platform_winpid() { # <msys-pid>
+  local pid=${1:-$$} out
+  fm_platform_is_windows || { printf '%s\n' "$pid"; return 0; }
+  out=$(fm_platform_msys_snapshot | awk -v p="$pid" '$1 == p { print $4; exit }')
+  case "$out" in
+    ''|*[!0-9]*) return 1 ;;
+    *) printf '%s\n' "$out" ;;
+  esac
+}
+
+# One capture of MSYS `ps` (PID PPID PGID WINPID ...), cached for this shell.
+FM_PLATFORM_MSYS_SNAPSHOT=""
+fm_platform_msys_snapshot() {
+  if [ -n "$FM_PLATFORM_MSYS_SNAPSHOT" ]; then
+    printf '%s\n' "$FM_PLATFORM_MSYS_SNAPSHOT"
+    return 0
+  fi
+  ps 2>/dev/null
+}
+
+# Populate the MSYS snapshot in the CALLER'S shell. Same subshell caveat as
+# fm_platform_win_snapshot_ensure: never call this in a command substitution.
+fm_platform_msys_snapshot_ensure() {
+  [ -z "$FM_PLATFORM_MSYS_SNAPSHOT" ] || return 0
+  FM_PLATFORM_MSYS_SNAPSHOT=$(ps 2>/dev/null) || return 1
+  [ -n "$FM_PLATFORM_MSYS_SNAPSHOT" ]
+}
+
+# Windows pid of the ROOT of this process's MSYS ancestry - the bridge between
+# the two pid spaces, and the crux of making ancestry work at all on Git Bash.
+#
+# MSYS emulates fork() with CreateProcess plus a transient helper, so a spawned
+# bash records a WINDOWS parent that has already exited. Measured: a script's
+# bash reported a Windows parent that was absent from both the process table and
+# ps -W, on every one of five consecutive runs. Walking Windows parents from a
+# script therefore dead-ends immediately, which is why an approach built only on
+# the Windows process table cannot work.
+#
+# MSYS ps, however, tracks its own pid space correctly, and the ROOT MSYS process
+# (the one whose MSYS ppid is 1) does retain a valid Windows parent link. So walk
+# MSYS parents to that root, then hand its WINPID to the Windows walk. Measured
+# end to end: msys 1771 -> 1513 (root, winpid 39548), then Windows 39548 ->
+# 39444 -> 32320 claude.exe, agreeing with CLAUDE_PID.
+fm_platform_msys_root_winpid() {
+  # Declared before assignment on purpose: `local a=$1 b=$a` does not see `a`
+  # within the same declaration, which trips set -u.
+  local start out
+  start=${1:-$$}
+  fm_platform_is_windows || return 1
+  fm_platform_msys_snapshot_ensure || return 1
+  # One awk pass. Walking hop by hop cost ~306ms for a two-hop chain, because
+  # each awk is its own process and process spawns are the dominant cost here.
+  # MSYS ps columns: PID PPID PGID WINPID TTY UID STIME COMMAND.
+  out=$(printf '%s\n' "$FM_PLATFORM_MSYS_SNAPSHOT" | awk -v start="$start" '
+    NR > 1 && $1 ~ /^[0-9]+$/ { ppid[$1] = $2; winpid[$1] = $4 }
+    END {
+      cur = start
+      # 16 hops is generous: real MSYS chains here are two or three deep.
+      for (i = 0; i < 16; i++) {
+        if (!(cur in ppid)) break
+        nxt = ppid[cur]
+        # ppid 1 (or missing) means cur is already the MSYS root.
+        if (nxt == "" || nxt + 0 <= 1 || nxt == cur) break
+        cur = nxt
+      }
+      if (cur in winpid) print winpid[cur]
+    }
+  ')
+  case "$out" in
+    ''|*[!0-9]*) return 1 ;;
+    *) printf '%s\n' "$out" ;;
+  esac
+}
+
+# Build the snapshot into FM_PLATFORM_WIN_SNAPSHOT in the CALLER'S shell.
+#
+# This must be called directly, never as $(fm_platform_win_snapshot_ensure): a
+# command substitution would populate the cache inside a subshell that then
+# exits, so every later lookup would rebuild it and respawn wmic. A multi-hop
+# ancestry walk did exactly that and cost 1111ms instead of one 346ms snapshot.
+fm_platform_win_snapshot_ensure() {
+  [ -z "$FM_PLATFORM_WIN_SNAPSHOT" ] || return 0
+  FM_PLATFORM_WIN_SNAPSHOT=$(fm_platform_win_snapshot_build) || return 1
+  [ -n "$FM_PLATFORM_WIN_SNAPSHOT" ]
+}
+
+# One snapshot of the Windows process table as "<pid>\t<ppid>\t<name>" lines,
+# cached for this shell. Prefers wmic for speed, falls back to PowerShell CIM.
+FM_PLATFORM_WIN_SNAPSHOT=""
+fm_platform_win_snapshot() {
+  if [ -n "$FM_PLATFORM_WIN_SNAPSHOT" ]; then
+    printf '%s\n' "$FM_PLATFORM_WIN_SNAPSHOT"
+    return 0
+  fi
+  fm_platform_win_snapshot_build
+}
+
+fm_platform_win_snapshot_build() {
+  local raw
+  fm_platform_is_windows || return 1
+
+  # wmic CSV columns are alphabetical: Node,Name,ParentProcessId,ProcessId.
+  if command -v wmic >/dev/null 2>&1; then
+    raw=$(wmic process get ProcessId,ParentProcessId,Name /format:csv 2>/dev/null \
+      | tr -d '\r' \
+      | awk -F, 'NF >= 4 && $4 ~ /^[0-9]+$/ { print $4 "\t" $3 "\t" $2 }')
+  fi
+  if [ -z "${raw:-}" ] && command -v powershell.exe >/dev/null 2>&1; then
+    # shellcheck disable=SC2016 # $_ and `t are PowerShell syntax; bash must not expand them.
+    raw=$(powershell.exe -NoProfile -NonInteractive -Command \
+      'Get-CimInstance Win32_Process | ForEach-Object { "{0}`t{1}`t{2}" -f $_.ProcessId, $_.ParentProcessId, $_.Name }' \
+      2>/dev/null | tr -d '\r')
+  fi
+  [ -n "${raw:-}" ] || return 1
+  printf '%s\n' "$raw"
+}
+
+# The whole Windows ancestry chain from <winpid> as "<pid>\t<name>" lines, most
+# recent first. One awk pass over the cached snapshot.
+#
+# This exists for cost, not elegance. Walking hop by hop through
+# fm_platform_win_ppid / fm_platform_win_name means two command substitutions per
+# hop, and process spawns are the dominant cost on Windows - measured elsewhere
+# in this port at 27x to 271x the Linux figure for spawn-heavy work. Resolving
+# the chain hop by hop took ~1376ms; one pass brings it near the cost of the two
+# snapshots alone. That matters because bin/fm-claude-stop-autoarm.sh resolves
+# harness identity on every turn-end hook, not once per session.
+fm_platform_win_ancestry_chain() { # <winpid> [max-hops]
+  local pid=$1 hops=${2:-8}
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  fm_platform_win_snapshot | awk -F'\t' -v start="$pid" -v maxhops="$hops" '
+    { ppid[$1] = $2; name[$1] = $3 }
+    END {
+      cur = start
+      for (i = 0; i < maxhops; i++) {
+        if (!(cur in name)) break
+        print cur "\t" name[cur]
+        nxt = ppid[cur]
+        if (nxt == "" || nxt + 0 <= 0 || nxt == cur) break
+        cur = nxt
+      }
+    }
+  '
+}
+
+# Parent Windows pid of a Windows pid, read from the cached snapshot.
+fm_platform_win_ppid() { # <winpid>
+  local pid=$1 out
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  out=$(fm_platform_win_snapshot | awk -F'\t' -v p="$pid" '$1 == p { print $2; exit }')
+  case "$out" in
+    ''|*[!0-9]*) return 1 ;;
+    *) printf '%s\n' "$out" ;;
+  esac
+}
+
+# Image name of a Windows pid. Reads the snapshot when one is already cached,
+# otherwise `ps -W`, which is cheaper than building a snapshot for one lookup.
+#
+# ps -W columns are PID PPID PGID WINPID TTY UID STIME COMMAND, and COMMAND is a
+# full path that frequently contains spaces ("C:\Program Files\..."). Taking $NF
+# would return a path fragment, so the command is rebuilt from field 8 onward
+# before the basename is stripped.
+fm_platform_win_name() { # <winpid>
+  local pid=$1 out
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  if [ -n "$FM_PLATFORM_WIN_SNAPSHOT" ]; then
+    out=$(printf '%s\n' "$FM_PLATFORM_WIN_SNAPSHOT" | awk -F'\t' -v p="$pid" '$1 == p { print $3; exit }')
+  else
+    out=$(ps -W 2>/dev/null | awk -v p="$pid" '
+      $4 == p {
+        cmd = $8
+        for (i = 9; i <= NF; i++) cmd = cmd " " $i
+        print cmd
+        exit
+      }')
+    out=${out##*[\\/]}
+  fi
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out"
+}
+
+# Full command line of a Windows pid. Only needed to recognize a harness hosted
+# by a bare interpreter (node, python), so it stays a targeted per-pid query
+# rather than bloating the bulk snapshot.
+fm_platform_win_command() { # <winpid>
+  local pid=$1 out
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  command -v powershell.exe >/dev/null 2>&1 || return 1
+  out=$(powershell.exe -NoProfile -NonInteractive -Command \
+    "(Get-CimInstance Win32_Process -Filter 'ProcessId=$pid').CommandLine" 2>/dev/null | tr -d '\r')
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out"
+}
+
+# True when a Windows pid is live. `ps -W` is the cheap path; kill -0 is wrong
+# here because MSYS kill does not speak Windows pids.
+fm_platform_win_pid_alive() { # <winpid>
+  local pid=$1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  ps -W 2>/dev/null | awk -v p="$pid" '$4 == p { found = 1; exit } END { exit !found }'
+}
