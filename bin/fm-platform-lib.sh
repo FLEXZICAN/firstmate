@@ -297,6 +297,52 @@ fm_platform_win_command() { # <winpid>
   printf '%s\n' "$out"
 }
 
+# Does any process hold <file> open? 0 held, 1 provably none, 2 cannot tell.
+# Deliberately the same three-state contract as fm_lock_lsof_holder, so the
+# staleness proof keeps its "uncertainty is not proof of death" property.
+#
+# lsof does not exist on Git Bash. Windows does not need it: file locking there
+# is mandatory rather than advisory, so asking to open the file with no sharing
+# is a direct test of whether anyone else holds a handle. Verified against a
+# holder opened with FILE_SHARE_NONE and against one opened with shared
+# read/write - both are detected, which makes this at least as strong a signal
+# as an lsof scan.
+#
+# Only IOException means "held". Anything else (missing file, permission denied,
+# an unusable interpreter) is reported as cannot-tell rather than guessed at.
+fm_platform_win_file_holder() { # <file>
+  local file=$1 winpath out
+  case "$file" in '') return 2 ;; esac
+  fm_platform_is_windows || return 2
+  command -v powershell.exe >/dev/null 2>&1 || return 2
+  if command -v cygpath >/dev/null 2>&1; then
+    winpath=$(cygpath -w -- "$file" 2>/dev/null) || return 2
+  else
+    winpath=$file
+  fi
+  [ -n "$winpath" ] || return 2
+  # The path is handed over through the environment rather than interpolated
+  # into the command text, so a path containing quotes cannot break out of it.
+  # shellcheck disable=SC2016 # $env: and $p are PowerShell syntax; bash must not expand them.
+  out=$(FM_PROBE_PATH="$winpath" powershell.exe -NoProfile -NonInteractive -Command '
+    $p = $env:FM_PROBE_PATH
+    if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { Write-Output "GONE"; exit }
+    try {
+      $fs = [System.IO.File]::Open($p, "Open", "ReadWrite", "None")
+      $fs.Close(); $fs.Dispose()
+      Write-Output "NO-HOLDER"
+    } catch [System.IO.IOException] {
+      Write-Output "HELD"
+    } catch {
+      Write-Output "UNKNOWN"
+    }' 2>/dev/null | tr -d '\r')
+  case "$out" in
+    HELD) return 0 ;;
+    NO-HOLDER|GONE) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
 # True when a Windows pid is live. `ps -W` is the cheap path; kill -0 is wrong
 # here because MSYS kill does not speak Windows pids.
 fm_platform_win_pid_alive() { # <winpid>

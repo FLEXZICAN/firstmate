@@ -188,6 +188,31 @@ ROOTWIN2=$(bash -c "
   || fail "a process already at the MSYS root must return its own WINPID, got '$ROOTWIN2'"
 pass "the bridge is correct when the caller is already the MSYS root"
 
+# --- git-lock staleness routing, exercised on every platform -----------------
+
+# With no lock path there is nothing to prove, so the Windows holder check must
+# fail safe and claim a live holder rather than authorize a deletion.
+if bash -c "
+  # shellcheck source=/dev/null
+  . '$ROOT/bin/fm-lock-lib.sh'
+  fm_lock_has_live_holder_windows '' '/some/dir'
+"; then
+  pass "the Windows holder check fails safe when given no lock path"
+else
+  fail "an empty lock path must be treated as 'assume live'"
+fi
+
+# A Linux uname must take the POSIX branch, never the Windows one. Asserted by
+# routing, not by outcome, so it holds on any host.
+ROUTED=$(bash -c "
+  export FM_PLATFORM_UNAME=Linux
+  # shellcheck source=/dev/null
+  . '$ROOT/bin/fm-lock-lib.sh'
+  fm_platform_is_windows && echo windows || echo posix
+")
+[ "$ROUTED" = posix ] || fail "a Linux uname must route to the POSIX lsof path, got '$ROUTED'"
+pass "a POSIX uname routes the staleness proof to the lsof path, not the Windows one"
+
 # --- the guarantee actually holds on a real Windows host ---------------------
 
 if ! (
@@ -245,3 +270,58 @@ pass "on a Windows host ln -s produces a real symlink that readlink resolves"
   exit 0
 ) || fail "the watcher lock must claim once and refuse a concurrent second claim"
 pass "the real watcher lock claims a resolvable symlink and refuses a second holder"
+
+# --- git-lock holder detection on a real Windows host ------------------------
+#
+# The safety-critical direction is the third case: a lock that is old enough to
+# look abandoned but is still held must NOT be declared stale, or teardown would
+# delete a live git's lock.
+(
+  # shellcheck source=/dev/null
+  . "$ROOT/bin/fm-lock-lib.sh"
+  WORK="$TMP/lockcase"
+  mkdir -p "$WORK" || exit 1
+  LOCK="$WORK/index.lock"
+  printf 'lock\n' > "$LOCK"
+
+  # A brand new lock is never stale, whatever the holder probe says.
+  fm_lock_is_provably_stale "$LOCK" "$WORK" 30 && { echo "fresh lock declared stale"; exit 1; }
+
+  # Aged with no holder: this is the case Windows previously could not prove,
+  # leaving every abandoned lock permanently un-clearable.
+  touch -d '2 hours ago' "$LOCK" 2>/dev/null || touch -t 202001010000 "$LOCK"
+  fm_lock_is_provably_stale "$LOCK" "$WORK" 30 || { echo "aged unheld lock not proven stale"; exit 1; }
+
+  # A missing lock is not stale, it is absent.
+  rm -f "$LOCK"
+  fm_lock_is_provably_stale "$LOCK" "$WORK" 30 && { echo "absent lock declared stale"; exit 1; }
+  exit 0
+) || fail "the Windows staleness proof must clear an aged unheld lock and refuse a fresh or absent one"
+pass "on Windows an aged unheld git lock is provably stale, while fresh and absent ones are not"
+
+# Held-lock refusal, the direction that must never regress.
+(
+  # shellcheck source=/dev/null
+  . "$ROOT/bin/fm-lock-lib.sh"
+  WORK="$TMP/heldcase"
+  mkdir -p "$WORK" || exit 1
+  LOCK="$WORK/index.lock"
+  printf 'lock\n' > "$LOCK"
+  touch -d '2 hours ago' "$LOCK" 2>/dev/null || touch -t 202001010000 "$LOCK"
+
+  # Hold the file open from a separate process, then assert the aged lock is
+  # still refused. Uses bash's own fd so the test needs no external helper.
+  exec 9<>"$LOCK"
+  sleep 20 <&9 &
+  holder=$!
+  sleep 1
+  if fm_lock_is_provably_stale "$LOCK" "$WORK" 30; then
+    kill "$holder" 2>/dev/null || true
+    echo "an aged but HELD lock was declared stale"
+    exit 1
+  fi
+  kill "$holder" 2>/dev/null || true
+  exec 9>&-
+  exit 0
+) || fail "an aged but still-held git lock must never be declared stale"
+pass "an aged git lock that is still held is refused, protecting a live git operation"
