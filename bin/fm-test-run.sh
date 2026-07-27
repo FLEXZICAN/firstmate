@@ -9,6 +9,7 @@
 #   fm-test-run.sh --family <name>
 #   fm-test-run.sh --changed [--base <git-ref>]
 #   fm-test-run.sh --lane portable-parallel-1|portable-parallel-2|portable-serial
+#   fm-test-run.sh --lane windows-gitbash
 #   fm-test-run.sh --proven-isolated
 #   fm-test-run.sh tests/<name>.test.sh [more scripts...]
 #
@@ -252,6 +253,45 @@ portable-parallel-1
 portable-parallel-2
 portable-serial
 real-herdr-gated
+windows-gitbash
+EOF
+}
+
+# Scripts measured green on native Windows Git Bash (MINGW64), one script per
+# line. Unlike the portable shards and the serial remainder, this lane is a
+# SELECTOR, not a member of the complete-regression partition: it deliberately
+# overlaps the other lanes and is not enumerated by run_coverage_guard, so
+# adding to it can never break the partition proof.
+#
+# Membership rule: the script must exit 0, report at least one "ok - "
+# assertion, and report no "not ok" on Windows Git Bash. A script that exits 0
+# only because it gate-skipped (missing tasks-axi, tsc, tmux, ...) is NOT
+# eligible - a skip is absence of coverage, not evidence of a pass.
+#
+# This list is expected to GROW as the Windows layer lands. Anything absent is
+# either blocked on a known gap (process-ancestry identity, the symlink-based
+# wake-queue mutex, lsof/flock/setsid, tmux) or simply not measured yet.
+# Re-measure with a full run before adding entries; do not add from intuition.
+list_windows_gitbash() {
+  cat <<'EOF'
+tests/fm-ask-user-authority.test.sh
+tests/fm-backend-herdr-respawn-idem-e2e.test.sh
+tests/fm-brief.test.sh
+tests/fm-calm-pi-extension.test.sh
+tests/fm-captain-translation-contract.test.sh
+tests/fm-composer-ghost.test.sh
+tests/fm-gotmp.test.sh
+tests/fm-install-herdr.test.sh
+tests/fm-instruction-owners.test.sh
+tests/fm-lint.test.sh
+tests/fm-nm-test-contract.test.sh
+tests/fm-no-mistakes-ownership.test.sh
+tests/fm-review-diff.test.sh
+tests/fm-send-settle.test.sh
+tests/fm-stow-contract.test.sh
+tests/fm-supervision-instructions.test.sh
+tests/fm-transition-lib.test.sh
+tests/no-mistakes-required-workflow.test.sh
 EOF
 }
 
@@ -390,6 +430,13 @@ select_lane() {
     real-herdr-gated)
       select_family real-herdr-gated
       found=1
+      ;;
+    windows-gitbash)
+      while IFS= read -r s; do
+        [ -n "$s" ] || continue
+        add_script "$s"
+        found=1
+      done < <(list_windows_gitbash)
       ;;
     *)
       die "unknown lane '$want' (see --list-lanes)"
