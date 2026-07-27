@@ -104,13 +104,40 @@ now_iso() {
   date -u +%Y-%m-%dT%H:%M:%SZ
 }
 
-now_ms() {
-  if command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import time; print(int(time.time() * 1000))'
-  else
-    # Second precision only when python3 is unavailable.
-    echo $(($(date +%s) * 1000))
+# Probed exactly once at load, not per call: every caller uses $(now_ms), so a
+# lazy in-function cache would live and die inside that subshell and re-probe
+# every time. Resolving here means subshells inherit the answer.
+#
+# `command -v python3` is not proof of a usable interpreter: Windows ships a
+# Microsoft Store "app execution alias" at python3 that resolves on PATH but
+# prints an install advertisement instead of running code, so the old probe
+# returned a non-numeric string and every caller's arithmetic failed. Probe by
+# executing, not by looking.
+#
+# GNU date's %3N is the next-best source (Linux and Git Bash have it; stock
+# macOS date does not, where it yields a literal "N" and is rejected here).
+fm_probe_now_ms_mode() {
+  local probe
+  if command -v python3 >/dev/null 2>&1 \
+    && [ "$(python3 -c 'print(1)' 2>/dev/null)" = 1 ]; then
+    printf 'python\n'
+    return 0
   fi
+  probe=$(date +%s%3N 2>/dev/null || true)
+  case "$probe" in
+    ''|*[!0-9]*) printf 'seconds\n' ;;
+    *) printf 'gnudate\n' ;;
+  esac
+}
+FM_NOW_MS_MODE=${FM_NOW_MS_MODE:-$(fm_probe_now_ms_mode)}
+
+now_ms() {
+  case "$FM_NOW_MS_MODE" in
+    python) python3 -c 'import time; print(int(time.time() * 1000))' ;;
+    gnudate) date +%s%3N ;;
+    # Second precision only when no millisecond source works.
+    *) echo $(($(date +%s) * 1000)) ;;
+  esac
 }
 
 # Primary family for one tests/*.test.sh basename. Unmapped scripts are
