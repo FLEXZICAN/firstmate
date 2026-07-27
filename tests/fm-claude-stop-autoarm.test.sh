@@ -21,6 +21,25 @@ FAKEBIN=$(fm_fakebin "$TMP_ROOT/fakebin")
 ln -s /bin/bash "$FAKEBIN/claude"
 FAKE_CLAUDE="$FAKEBIN/claude"
 
+# Session ownership is recorded in the platform's pid space, which on Windows is
+# the Windows pid rather than the MSYS one (a native harness has no MSYS pid at
+# all, so only Windows pids can identify every harness). Job control still speaks
+# MSYS pids, so kill/wait keep using $! while the RECORDED owner is converted.
+# Not a static source= directive on purpose: tests/fm-lint.test.sh reserves
+# production source context for the callback/variable interop tests, and this
+# only needs to call a function.
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-platform-lib.sh"
+
+owner_pid_of() { # <msys-pid> -> the pid firstmate would record for it
+  local p=$1
+  if fm_platform_is_windows; then
+    fm_platform_winpid "$p" 2>/dev/null || printf '%s\n' "$p"
+  else
+    printf '%s\n' "$p"
+  fi
+}
+
 # Copy the hook and its sourced dependencies into a fixture checkout.
 install_autoarm_scripts() {
   local dir=$1
@@ -30,6 +49,9 @@ install_autoarm_scripts() {
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
   cp "$ROOT/bin/fm-session-lock-lib.sh" "$dir/bin/fm-session-lock-lib.sh"
+  # Sourced by both fm-wake-lib.sh and fm-session-lock-lib.sh for the platform
+  # seam, so it is a required sibling even though the hook never names it.
+  cp "$ROOT/bin/fm-platform-lib.sh" "$dir/bin/fm-platform-lib.sh"
   cp "$ROOT/bin/fm-lock.sh" "$dir/bin/fm-lock.sh"
   chmod +x "$dir/bin/fm-claude-stop-autoarm.sh" "$dir/bin/fm-lock.sh"
 }
@@ -69,7 +91,8 @@ run_autoarm() {
   local dir=$1 rc=0
   printf '%s\n' '{"session_id":"sess-autoarm","stop_hook_active":false}' \
     | FM_HOME="$dir" "$FAKE_CLAUDE" -c '
-        printf "%s\n" "$$" > "$FM_HOME/state/.lock"
+        . "$FM_HOME/bin/fm-platform-lib.sh"
+        fm_platform_self_pid > "$FM_HOME/state/.lock"
         "$FM_HOME/bin/fm-claude-stop-autoarm.sh"
       ' 2>&1 || rc=$?
   printf 'RC=%s\n' "$rc" >&2
@@ -207,7 +230,8 @@ test_reclaims_stale_session_lock_before_arming() {
   write_arm_fixture "$dir" actionable
   out=$(printf '%s\n' '{"session_id":"stale"}' \
     | FM_HOME="$dir" "$FAKE_CLAUDE" -c '
-        printf "%s\n" "$$" > "$FM_HOME/state/expected-owner"
+        . "$FM_HOME/bin/fm-platform-lib.sh"
+        fm_platform_self_pid > "$FM_HOME/state/expected-owner"
         "$FM_HOME/bin/fm-claude-stop-autoarm.sh"
       ' 2>&1); status=$?
   expect_code 2 "$status" "a dead recorded session owner must be reclaimed before the actionable rewake"
@@ -220,7 +244,7 @@ test_reclaims_stale_session_lock_before_arming() {
 }
 
 test_inert_when_lock_held_by_other_harness() {
-  local dir other out status owner_after
+  local dir other other_owner out status owner_after
   dir=$(make_primary_dir "$TMP_ROOT/other-lock")
   : > "$dir/state/task.meta"
   write_arm_fixture "$dir" actionable
@@ -228,13 +252,14 @@ test_inert_when_lock_held_by_other_harness() {
   # bash to exec the final sleep into a non-harness process.
   "$FAKE_CLAUDE" -c 'sleep 60; :' &
   other=$!
-  printf '%s\n' "$other" > "$dir/state/.lock"
+  other_owner=$(owner_pid_of "$other")
+  printf '%s\n' "$other_owner" > "$dir/state/.lock"
   out=$(printf '%s\n' '{"session_id":"s"}' | FM_HOME="$dir" "$FAKE_CLAUDE" -c '"$FM_HOME/bin/fm-claude-stop-autoarm.sh"' 2>&1); status=$?
   owner_after=$(cat "$dir/state/.lock")
   kill "$other" 2>/dev/null || true
   wait "$other" 2>/dev/null || true
   expect_code 0 "$status" "hook must stay inert when another live harness holds the session lock"
-  [ "$owner_after" = "$other" ] || fail "hook replaced another live harness owner: expected $other, got $owner_after"
+  [ "$owner_after" = "$other_owner" ] || fail "hook replaced another live harness owner: expected $other_owner, got $owner_after"
   [ ! -e "$dir/state/arm-ran" ] || fail "hook armed while another session owned the lock"
   [ ! -e "$dir/state/.claude-autoarm-epoch" ] || fail "hook wrote an epoch while another session owned the lock"
   pass "auto-arm: inert without arm, rewake, or lock replacement when another live harness owns the home"
@@ -346,7 +371,8 @@ test_single_flight_admits_exactly_one_owner() {
   : > "$dir/state/task.meta"
   write_arm_fixture "$dir" slow-actionable
   FM_HOME="$dir" "$FAKE_CLAUDE" -c '
-    printf "%s\n" "$$" > "$FM_HOME/state/.lock"
+    . "$FM_HOME/bin/fm-platform-lib.sh"
+    fm_platform_self_pid > "$FM_HOME/state/.lock"
     printf "%s\n" "{\"session_id\":\"s\"}" | "$FM_HOME/bin/fm-claude-stop-autoarm.sh" >/dev/null 2>"$FM_HOME/state/err1" &
     p1=$!
     printf "%s\n" "{\"session_id\":\"s\"}" | "$FM_HOME/bin/fm-claude-stop-autoarm.sh" >/dev/null 2>"$FM_HOME/state/err2" &

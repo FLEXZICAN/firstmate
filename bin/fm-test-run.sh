@@ -274,12 +274,22 @@ EOF
 # intuition.
 #
 # A flaky script is as disqualifying as a failing one, because a lane nobody
-# trusts is worse than no lane. fm-wake-daemon-lifecycle-e2e.test.sh is held out
-# for exactly that reason: it passed when measured once, then failed 2 of 3
-# standalone runs. Root cause is not this port - tests/wake-helpers.sh's
-# wait_for_exit allows 50 x 0.1s = 5s for a watcher to spawn, poll at FM_POLL=1,
-# and exit, which is ample on Linux and marginal on Windows where process spawns
-# are far more expensive. It becomes eligible once that budget is platform-aware.
+# trusts is worse than no lane. Two are held out on that rule:
+#
+# fm-wake-daemon-lifecycle-e2e.test.sh passed when measured once, then failed 2
+# of 3 standalone runs. tests/wake-helpers.sh's wait_for_exit allows
+# 50 x 0.1s = 5s for a watcher to spawn, poll at FM_POLL=1, and exit - ample on
+# Linux, marginal on Windows where process spawns are far more expensive. It
+# becomes eligible once that budget is platform-aware.
+#
+# fm-claude-stop-autoarm.test.sh passes all 17 assertions standalone, reliably
+# (4 direct runs, once under this runner alone, once behind its five lane
+# predecessors). In a FULL lane it failed once with exit 127 and hung once,
+# never finishing. A leftover `sleep 60` fake-harness process was still running
+# afterwards, so the background harness it starts is not reliably reaped; under
+# the process pressure of a full lane that turns into a hang. The production
+# behavior it covers is verified - it is the test's process handling that is not
+# lane-safe here, so it stays out until that is fixed.
 list_windows_gitbash() {
   cat <<'EOF'
 tests/fm-ask-user-authority.test.sh
