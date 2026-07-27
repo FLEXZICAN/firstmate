@@ -10,6 +10,8 @@
 #   fm-test-run.sh --changed [--base <git-ref>]
 #   fm-test-run.sh --lane portable-parallel-1|portable-parallel-2|portable-serial
 #   fm-test-run.sh --lane windows-gitbash
+#   fm-test-run.sh --lane windows-gitbash-parallel --jobs 6   # then:
+#   fm-test-run.sh --lane windows-gitbash-serial
 #   fm-test-run.sh --proven-isolated
 #   fm-test-run.sh tests/<name>.test.sh [more scripts...]
 #
@@ -67,6 +69,11 @@ set -eu
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 1
+
+# Used by the parallel worker isolation check, which must distinguish a real
+# permission failure from a platform that cannot express one.
+# shellcheck source=bin/fm-platform-lib.sh
+. "$ROOT/bin/fm-platform-lib.sh"
 
 MODE=
 LIST_ONLY=0
@@ -254,6 +261,8 @@ portable-parallel-2
 portable-serial
 real-herdr-gated
 windows-gitbash
+windows-gitbash-parallel
+windows-gitbash-serial
 EOF
 }
 
@@ -456,6 +465,25 @@ select_lane() {
     windows-gitbash)
       while IFS= read -r s; do
         [ -n "$s" ] || continue
+        add_script "$s"
+        found=1
+      done < <(list_windows_gitbash)
+      ;;
+    # The two halves of windows-gitbash, split by --jobs eligibility. DERIVED
+    # from the one list plus the proven-isolated set rather than restated, so
+    # they cannot drift out of sync with it.
+    windows-gitbash-parallel)
+      while IFS= read -r s; do
+        [ -n "$s" ] || continue
+        is_proven_isolated_script "$s" || continue
+        add_script "$s"
+        found=1
+      done < <(list_windows_gitbash)
+      ;;
+    windows-gitbash-serial)
+      while IFS= read -r s; do
+        [ -n "$s" ] || continue
+        is_proven_isolated_script "$s" && continue
         add_script "$s"
         found=1
       done < <(list_windows_gitbash)
@@ -1388,12 +1416,36 @@ else
     if [ -s "$out" ]; then
       cat "$out"
     fi
+    # Worker roots must be private to their worker. The mode check is the POSIX
+    # way to prove that, and it cannot hold on Windows: NTFS has no faithful
+    # mapping for POSIX mode bits, so a root created 0700 reads back as 755 and
+    # every parallel worker fails an assertion its tests just passed. Measured:
+    # 12 of 12 scripts "failed" this way with every assertion green.
+    #
+    # What the check is really guaranteeing - that each worker gets its OWN root,
+    # created fresh by mktemp -d under a run-private parent - is unaffected by the
+    # platform and still holds. Only the "no other account can read it" half is
+    # unenforceable, which is the same reduction already accepted for the
+    # watcher's check-trust guard (see bin/fm-check-lib.sh). The exposure is
+    # another local account reading a temp dir during a test run.
+    #
+    # So the mode is verified where it is meaningful and reported without failing
+    # the run where it is not.
     mode=$(stat -c %a "$work" 2>/dev/null || stat -f %Lp "$work" 2>/dev/null || echo unknown)
     case "$mode" in
       700|0700) ;;
       *)
-        log "isolation failure: worker root mode is $mode, expected 0700 ($work)"
-        rc=1
+        if fm_platform_is_windows; then
+          # Once per run, not once per worker: it is a property of the platform,
+          # and repeating it for every worker buries real output.
+          if [ -z "${FM_WORKER_MODE_NOTED:-}" ] && : >"$RUN_TMP/.mode-noted" 2>/dev/null; then
+            FM_WORKER_MODE_NOTED=1
+            log "note: worker roots are mode $mode, not 0700; POSIX mode bits are cosmetic on this platform, so the mode half of the isolation check is advisory here. Per-worker root separation still holds."
+          fi
+        else
+          log "isolation failure: worker root mode is $mode, expected 0700 ($work)"
+          rc=1
+        fi
         ;;
     esac
     record_script_result "$script" "$rc" "$duration" "$out" "$end_iso"
