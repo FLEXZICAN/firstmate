@@ -1,4 +1,30 @@
 #!/usr/bin/env bash
+#
+# Trust binding for the custom state/<id>.check.sh scripts the watcher executes.
+#
+# WINDOWS CAVEAT, decided deliberately rather than overlooked.
+#
+# The guard rests on five properties: mode 0700, link count 1, a recorded
+# device+inode identity, not-a-symlink, and a sha256 byte binding written by
+# bin/fm-check-register.sh. On Git Bash, `stat` reports all five, so this code
+# runs unmodified - but Windows has no faithful mapping for POSIX mode bits, so
+# `0700` there does not mean "no other account may write this". The other four
+# are unaffected: device+inode, link count, the symlink check, and the hash all
+# behave normally on NTFS.
+#
+# The weakened half is PERMISSION, not SUBSTITUTION. Anything that swaps, links,
+# or edits the file is still caught by identity plus the byte binding. What is
+# no longer enforced is the filesystem preventing another LOCAL account from
+# writing into this home's gitignored state/ directory in the first place. That
+# is not remote exposure, and it is not another firstmate home.
+#
+# Two stronger options were considered and rejected: an ACL check via PowerShell
+# would add a ~500ms spawn to the watcher poll path plus Windows-specific
+# security code that must itself be correct, and would risk false refusals on
+# inherited ACLs, roaming profiles, or network drives - a false refusal silently
+# disables a check. Refusing custom checks on Windows outright would remove the
+# feature there for a threat model that does not warrant it. Revisit if
+# firstmate ever runs on a shared or multi-user Windows machine.
 
 FM_CUSTOM_CHECK_HASH=
 FM_CUSTOM_CHECK_SNAPSHOT=

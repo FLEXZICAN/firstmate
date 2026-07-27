@@ -274,22 +274,18 @@ EOF
 # intuition.
 #
 # A flaky script is as disqualifying as a failing one, because a lane nobody
-# trusts is worse than no lane. Two are held out on that rule:
+# trusts is worse than no lane. Two scripts were held out under that rule and
+# have since been repaired rather than waived:
 #
-# fm-wake-daemon-lifecycle-e2e.test.sh passed when measured once, then failed 2
-# of 3 standalone runs. tests/wake-helpers.sh's wait_for_exit allows
-# 50 x 0.1s = 5s for a watcher to spawn, poll at FM_POLL=1, and exit - ample on
-# Linux, marginal on Windows where process spawns are far more expensive. It
-# becomes eligible once that budget is platform-aware.
+#   fm-wake-daemon-lifecycle-e2e.test.sh failed 2 of 3 runs on timing alone.
+#   tests/wake-helpers.sh's wait_for_exit budget is now substrate-scaled.
 #
-# fm-claude-stop-autoarm.test.sh passes all 17 assertions standalone, reliably
-# (4 direct runs, once under this runner alone, once behind its five lane
-# predecessors). In a FULL lane it failed once with exit 127 and hung once,
-# never finishing. A leftover `sleep 60` fake-harness process was still running
-# afterwards, so the background harness it starts is not reliably reaped; under
-# the process pressure of a full lane that turns into a hang. The production
-# behavior it covers is verified - it is the test's process handling that is not
-# lane-safe here, so it stays out until that is fixed.
+#   fm-claude-stop-autoarm.test.sh failed once with exit 127 and hung once in a
+#   full lane. Its background fake harness held the test's stdout pipe, so the
+#   orphaned child blocked whoever was reading it; that output is now redirected.
+#
+# Neither was added back on the strength of a standalone pass - each had to
+# survive the context that exposed it.
 list_windows_gitbash() {
   cat <<'EOF'
 tests/fm-ask-user-authority.test.sh
@@ -297,6 +293,7 @@ tests/fm-backend-herdr-respawn-idem-e2e.test.sh
 tests/fm-brief.test.sh
 tests/fm-calm-pi-extension.test.sh
 tests/fm-captain-translation-contract.test.sh
+tests/fm-claude-stop-autoarm.test.sh
 tests/fm-composer-ghost.test.sh
 tests/fm-gate-refuse.test.sh
 tests/fm-gotmp.test.sh
@@ -315,6 +312,7 @@ tests/fm-supervision-instructions.test.sh
 tests/fm-tangle-guard.test.sh
 tests/fm-transition-lib.test.sh
 tests/fm-update.test.sh
+tests/fm-wake-daemon-lifecycle-e2e.test.sh
 tests/no-mistakes-required-workflow.test.sh
 EOF
 }

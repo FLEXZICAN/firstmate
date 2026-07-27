@@ -257,8 +257,34 @@ SH
   printf '%s\n' "$dir"
 }
 
+# Multiplier on watcher-exit wait budgets, for substrates where starting a
+# process costs far more than the budgets assume.
+#
+# Callers pass a limit in 0.1s ticks, so the defaults here are 4-5 seconds for a
+# watcher to spawn, poll at FM_POLL=1, and exit. That is ample on Linux. On
+# Windows Git Bash it is marginal: spawn-heavy work in this suite measured 27x to
+# 271x the Linux cost, which made fm-wake-daemon-lifecycle-e2e fail 2 of 3 runs
+# purely on timing. Scaling the budget rather than raising every call site keeps
+# one knob and leaves POSIX behavior byte-identical.
+#
+# FM_TEST_WAIT_SCALE overrides it, so a slow CI runner can be compensated without
+# a code change.
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-platform-lib.sh"
+
+fm_test_wait_scale() {
+  if [ -n "${FM_TEST_WAIT_SCALE:-}" ]; then
+    printf '%s\n' "$FM_TEST_WAIT_SCALE"
+  elif fm_platform_is_windows; then
+    printf '6\n'
+  else
+    printf '1\n'
+  fi
+}
+
 wait_for_exit() {
   local pid=$1 limit=${2:-50} i=0
+  limit=$(( limit * $(fm_test_wait_scale) ))
   while [ "$i" -lt "$limit" ]; do
     if ! is_live_non_zombie "$pid"; then
       wait "$pid"

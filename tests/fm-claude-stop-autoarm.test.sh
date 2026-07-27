@@ -250,7 +250,13 @@ test_inert_when_lock_held_by_other_harness() {
   write_arm_fixture "$dir" actionable
   # The trailing no-op keeps the fake harness process alive instead of allowing
   # bash to exec the final sleep into a non-harness process.
-  "$FAKE_CLAUDE" -c 'sleep 60; :' &
+  # stdout/stderr are redirected so this background harness never holds the
+  # test's own pipe. Killing it leaves its `sleep` child orphaned - bash is kept
+  # alive deliberately (see above) rather than exec'd into the sleep, so the
+  # child outlives the kill. An orphan that still holds the inherited stdout pipe
+  # blocks whoever is reading it, which is how a full lane run hung here rather
+  # than merely running slowly.
+  "$FAKE_CLAUDE" -c 'sleep 60; :' >/dev/null 2>&1 &
   other=$!
   other_owner=$(owner_pid_of "$other")
   printf '%s\n' "$other_owner" > "$dir/state/.lock"
