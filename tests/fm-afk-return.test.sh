@@ -18,6 +18,8 @@ install_runner() {  # <case-dir>
   mkdir -p "$dir/bin" "$dir/home/state" "$dir/home/data" "$dir/home/config"
   cp "$ROOT/bin/fm-afk-return.sh" "$dir/bin/"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/"
+  # fm-wake-lib.sh sources the platform seam, so it is a required sibling.
+  cp "$ROOT/bin/fm-platform-lib.sh" "$dir/bin/"
   cp "$ROOT/bin/fm-classify-lib.sh" "$dir/bin/"
   cat > "$dir/bin/fm-afk-launch.sh" <<'SH'
 #!/usr/bin/env bash

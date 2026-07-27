@@ -257,6 +257,9 @@ cp "$ROOT/.pi/extensions/lib/fm-calm-visibility.ts" "$PROJECT/.pi/extensions/lib
 cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$PROJECT/.pi/extensions/lib/fm-operational-input.ts"
 cp "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" "$PROJECT/.pi/extensions/fm-primary-turnend-guard.ts"
 cp "$ROOT/bin/fm-watch-arm.sh" "$PROJECT/bin/fm-watch-arm.sh"
+# fm-watch-arm.sh pulls in fm-wake-lib.sh, which sources the platform seam.
+cp "$ROOT/bin/fm-wake-lib.sh" "$PROJECT/bin/fm-wake-lib.sh"
+cp "$ROOT/bin/fm-platform-lib.sh" "$PROJECT/bin/fm-platform-lib.sh"
 cp "$ROOT/bin/fm-operational-input.sh" "$PROJECT/bin/fm-operational-input.sh"
 cp "$ROOT/bin/fm-supervision-instructions.sh" "$PROJECT/bin/fm-supervision-instructions.sh"
 chmod +x "$PROJECT/bin/fm-operational-input.sh"

@@ -69,6 +69,9 @@ trap cleanup EXIT
 mkdir -p "$LAB"
 git clone -q "$ROOT" "$PROJECT"
 cp "$ROOT/bin/fm-watch-arm.sh" "$PROJECT/bin/fm-watch-arm.sh"
+# fm-watch-arm.sh pulls in fm-wake-lib.sh, which sources the platform seam.
+cp "$ROOT/bin/fm-wake-lib.sh" "$PROJECT/bin/fm-wake-lib.sh"
+cp "$ROOT/bin/fm-platform-lib.sh" "$PROJECT/bin/fm-platform-lib.sh"
 mkdir -p "$HOME_DIR/state" "$HOME_DIR/config"
 printf 'project=fixture\n' > "$HOME_DIR/state/grok-e2e.meta"
 

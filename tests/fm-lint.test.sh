@@ -258,6 +258,86 @@ test_source_graph_boundaries_keep_every_owner() {
   pass "dispatcher, adapters, production owner, and tests have explicit lint boundaries"
 }
 
+# A fixture that installs a production script into a fake root must also install
+# everything that script sources, transitively.
+#
+# This exists because the failure mode is silent and recurring. Fixtures list
+# their dependencies by hand, so adding ONE `source` to a shared lib breaks every
+# fixture that installs that lib - and it breaks them at runtime, as an exit 127
+# or a "No such file or directory" buried in a test's output, far from the change
+# that caused it. It happened three times in quick succession when
+# bin/fm-platform-lib.sh was introduced (fm-gotmp, fm-claude-stop-autoarm, and
+# then five more found only by writing this check).
+#
+# The closure is read from the `# shellcheck source=bin/...` directives the
+# production scripts already carry, so there is no second dependency list to keep
+# in sync: the thing lint already enforces is the thing this reads.
+fixture_installed_scripts() { # <test-file> -> basenames it installs
+  # Backslash continuations are joined first: fixtures routinely install several
+  # files in one multi-line `cp a b c dest`, and a line-at-a-time scan sees only
+  # the first. Matching is restricted to cp/ln -s in command position so that
+  # merely INVOKING a real script (e.g. "$ROOT/bin/fm-bootstrap.sh install ...")
+  # is not mistaken for installing one.
+  # shellcheck disable=SC2016 # $ROOT is matched literally: it is text inside the test sources, not a value to expand.
+  sed -e :a -e '/\\$/N; s/\\\n//; ta' "$1" 2>/dev/null \
+    | grep -E '(^|[;&|(]|[[:space:]])(cp|ln -s) ' \
+    | grep -oE '\$ROOT/bin/[a-zA-Z0-9./_-]+\.sh' \
+    | sed 's|.*bin/||' \
+    | LC_ALL=C sort -u
+}
+
+script_direct_sources() { # <basename> -> basenames it sources
+  local f="$ROOT/bin/$1"
+  [ -f "$f" ] || return 0
+  grep -hoE '# shellcheck source=bin/[a-zA-Z0-9./_-]+\.sh' "$f" 2>/dev/null \
+    | sed 's|# shellcheck source=bin/||' \
+    | LC_ALL=C sort -u
+}
+
+test_fixtures_install_their_transitive_source_closure() {
+  local t installed need frontier next s dep missing offenders=""
+  for t in "$ROOT"/tests/*.sh; do
+    installed=$(fixture_installed_scripts "$t")
+    [ -n "$installed" ] || continue
+
+    need=""
+    frontier=$installed
+    # Bounded rather than while-true: the source graph is shallow, and a cycle
+    # must not hang the suite.
+    for _ in 1 2 3 4 5 6 7 8; do
+      next=""
+      while IFS= read -r s; do
+        [ -n "$s" ] || continue
+        while IFS= read -r dep; do
+          [ -n "$dep" ] || continue
+          case "$need" in *"|$dep|"*) continue ;; esac
+          need="$need|$dep|"
+          next="$next$dep
+"
+        done <<EOF
+$(script_direct_sources "$s")
+EOF
+      done <<EOF
+$frontier
+EOF
+      [ -n "$next" ] || break
+      frontier=$next
+    done
+
+    missing=""
+    for dep in $(printf '%s' "$need" | tr '|' '\n' | LC_ALL=C sort -u); do
+      [ -n "$dep" ] || continue
+      printf '%s\n' "$installed" | grep -qxF "$dep" && continue
+      missing="$missing $dep"
+    done
+    [ -z "$missing" ] || offenders="${offenders}$(basename "$t"):$missing
+"
+  done
+  [ -z "$offenders" ] || fail "fixtures install a script without its sources:
+$offenders"
+  pass "every fixture that installs a production script also installs its transitive sources"
+}
+
 test_jobs_are_deterministic_and_complete() {
   if ! pinned_ready; then
     pass "SKIP (ShellCheck $REQUIRED not resolved): deterministic bounded jobs check"
@@ -494,6 +574,7 @@ test_catches_a_real_lint_defect
 test_ignores_ambient_shellcheck_opts
 test_clean_fixture_passes
 test_source_graph_boundaries_keep_every_owner
+test_fixtures_install_their_transitive_source_closure
 test_jobs_are_deterministic_and_complete
 test_worker_trees_stop_on_signal
 test_seeded_module_boundary_parity
