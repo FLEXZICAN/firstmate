@@ -15,6 +15,11 @@
 # Usage: fm-ensure-agents-md.sh [repo-or-worktree-dir]
 set -eu
 
+# CLAUDE.md is created as a symlink to AGENTS.md, so real symlink semantics are
+# required. Inert off Windows; see bin/fm-platform-lib.sh.
+# shellcheck source=bin/fm-platform-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-platform-lib.sh"
+
 usage() {
   echo "usage: fm-ensure-agents-md.sh [repo-or-worktree-dir]" >&2
 }

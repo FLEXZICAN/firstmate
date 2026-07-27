@@ -3,6 +3,11 @@
 
 FM_WAKE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_WAKE_DEFAULT_ROOT="$(cd "$FM_WAKE_LIB_DIR/.." && pwd)"
+# The lock below claims ownership with `ln -s` and verifies with readlink, so
+# real symlink semantics are a correctness requirement, not a preference. Inert
+# off Windows. See bin/fm-platform-lib.sh for what stock Git Bash does instead.
+# shellcheck source=bin/fm-platform-lib.sh
+. "$FM_WAKE_LIB_DIR/fm-platform-lib.sh"
 FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_WAKE_DEFAULT_ROOT}}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}"
