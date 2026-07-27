@@ -1,0 +1,15 @@
+# Firstmate is a bash codebase: every tracked text file must check out with LF
+# endings on every platform, including Windows.
+#
+# Git for Windows defaults to core.autocrlf=true. With no .gitattributes to
+# override it, every tracked .sh file lands in the working tree with CRLF, which
+# silently breaks:
+#   - heredoc terminators, because "<<'SH'" never matches a closing "SH\r"
+#   - "#!/usr/bin/env bash\r" shebangs, which look for an interpreter named "bash\r"
+#   - shellcheck, which rejects literal carriage returns (SC1017)
+#
+# This is inert on Linux and macOS, where checkouts are already LF.
+* text=auto eol=lf
+
+# Binary assets must never be line-ending normalized.
+*.png binary
