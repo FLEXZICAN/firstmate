@@ -269,9 +269,17 @@ EOF
 # eligible - a skip is absence of coverage, not evidence of a pass.
 #
 # This list is expected to GROW as the Windows layer lands. Anything absent is
-# either blocked on a known gap (process-ancestry identity, the symlink-based
-# wake-queue mutex, lsof/flock/setsid, tmux) or simply not measured yet.
-# Re-measure with a full run before adding entries; do not add from intuition.
+# either blocked on a known gap (lsof/flock/setsid, tmux) or simply not measured
+# yet. Re-measure with a full run before adding entries; do not add from
+# intuition.
+#
+# A flaky script is as disqualifying as a failing one, because a lane nobody
+# trusts is worse than no lane. fm-wake-daemon-lifecycle-e2e.test.sh is held out
+# for exactly that reason: it passed when measured once, then failed 2 of 3
+# standalone runs. Root cause is not this port - tests/wake-helpers.sh's
+# wait_for_exit allows 50 x 0.1s = 5s for a watcher to spawn, poll at FM_POLL=1,
+# and exit, which is ample on Linux and marginal on Windows where process spawns
+# are far more expensive. It becomes eligible once that budget is platform-aware.
 list_windows_gitbash() {
   cat <<'EOF'
 tests/fm-ask-user-authority.test.sh
@@ -297,7 +305,6 @@ tests/fm-supervision-instructions.test.sh
 tests/fm-tangle-guard.test.sh
 tests/fm-transition-lib.test.sh
 tests/fm-update.test.sh
-tests/fm-wake-daemon-lifecycle-e2e.test.sh
 tests/no-mistakes-required-workflow.test.sh
 EOF
 }

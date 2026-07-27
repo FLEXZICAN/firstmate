@@ -105,6 +105,89 @@ MSYS_POSIX=$(
 [ "$MSYS_POSIX" = unset ] || fail "POSIX hosts must not gain an MSYS value, got '$MSYS_POSIX'"
 pass "sourcing on Linux leaves MSYS untouched"
 
+# --- ancestry algorithms, exercised on every platform ------------------------
+#
+# Both walks are pure functions over a process-table snapshot, so injecting
+# FM_PLATFORM_WIN_SNAPSHOT / FM_PLATFORM_MSYS_SNAPSHOT exercises them fully on
+# Linux CI. The fixtures encode the topology actually measured on Git Bash,
+# including the failure that makes the naive approach unusable.
+
+# Windows table: "<pid>\t<ppid>\t<name>". Mirrors a real measured chain,
+# 36676 bash -> 38468 bash -> 32320 claude.exe -> 1968 pwsh -> 11768 herdr.
+WIN_FIXTURE=$(printf '%s\n' \
+  "36676	38468	bash.exe" \
+  "38468	32320	bash.exe" \
+  "32320	1968	claude.exe" \
+  "1968	11768	pwsh.exe" \
+  "11768	4128	herdr.exe")
+
+CHAIN=$(FM_PLATFORM_WIN_SNAPSHOT=$WIN_FIXTURE bash -c "
+  # shellcheck source=/dev/null
+  . '$PLATFORM_LIB'
+  FM_PLATFORM_WIN_SNAPSHOT=\"\$1\"
+  fm_platform_win_ancestry_chain 36676 8
+" _ "$WIN_FIXTURE")
+[ "$(printf '%s\n' "$CHAIN" | wc -l | tr -d '[:space:]')" = 5 ] \
+  || fail "chain should have 5 hops, got: $CHAIN"
+printf '%s\n' "$CHAIN" | grep -q '^32320	claude\.exe$' \
+  || fail "chain must contain the harness hop, got: $CHAIN"
+pass "fm_platform_win_ancestry_chain walks a snapshot to the harness in one pass"
+
+# A dangling parent must terminate the walk rather than loop or invent hops.
+# This is the measured Git Bash reality: a spawned bash records a Windows parent
+# that has already exited, so the chain ends after one hop.
+ORPHAN=$(printf '%s\n' "26576	36772	bash.exe")
+CHAIN2=$(bash -c "
+  # shellcheck source=/dev/null
+  . '$PLATFORM_LIB'
+  FM_PLATFORM_WIN_SNAPSHOT=\"\$1\"
+  fm_platform_win_ancestry_chain 26576 8
+" _ "$ORPHAN")
+[ "$(printf '%s\n' "$CHAIN2" | wc -l | tr -d '[:space:]')" = 1 ] \
+  || fail "a dead parent must end the walk after one hop, got: $CHAIN2"
+pass "an exited Windows parent terminates the chain instead of dead-ending mid-walk"
+
+# A parent cycle must not hang the walk.
+CYCLE=$(printf '%s\n' "10	20	a.exe" "20	10	b.exe")
+CHAIN3=$(bash -c "
+  # shellcheck source=/dev/null
+  . '$PLATFORM_LIB'
+  FM_PLATFORM_WIN_SNAPSHOT=\"\$1\"
+  fm_platform_win_ancestry_chain 10 8
+" _ "$CYCLE")
+[ "$(printf '%s\n' "$CHAIN3" | wc -l | tr -d '[:space:]')" -le 8 ] \
+  || fail "a pid cycle must stay bounded by max hops, got: $CHAIN3"
+pass "a parent cycle stays bounded by the hop limit"
+
+# MSYS table: PID PPID PGID WINPID ... The root is the entry whose PPID is 1,
+# and its WINPID is the bridge into the Windows table.
+MSYS_FIXTURE=$(printf '%s\n' \
+  "      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND" \
+  "     1771    1513    1771      10980   ?        197609 17:00:53 /usr/bin/bash" \
+  "     1513       1    1513      39548   ?        197609 17:00:30 /usr/bin/bash")
+ROOTWIN=$(bash -c "
+  # shellcheck source=/dev/null
+  . '$PLATFORM_LIB'
+  FM_PLATFORM_UNAME=MINGW64_NT-10.0
+  FM_PLATFORM_MSYS_SNAPSHOT=\"\$1\"
+  fm_platform_msys_root_winpid 1771
+" _ "$MSYS_FIXTURE")
+[ "$ROOTWIN" = 39548 ] \
+  || fail "MSYS root bridge must yield the root's WINPID 39548, got '$ROOTWIN'"
+pass "fm_platform_msys_root_winpid walks MSYS parents to the root and returns its WINPID"
+
+# Already at the root: the bridge must return that process's own WINPID.
+ROOTWIN2=$(bash -c "
+  # shellcheck source=/dev/null
+  . '$PLATFORM_LIB'
+  FM_PLATFORM_UNAME=MINGW64_NT-10.0
+  FM_PLATFORM_MSYS_SNAPSHOT=\"\$1\"
+  fm_platform_msys_root_winpid 1513
+" _ "$MSYS_FIXTURE")
+[ "$ROOTWIN2" = 39548 ] \
+  || fail "a process already at the MSYS root must return its own WINPID, got '$ROOTWIN2'"
+pass "the bridge is correct when the caller is already the MSYS root"
+
 # --- the guarantee actually holds on a real Windows host ---------------------
 
 if ! (
