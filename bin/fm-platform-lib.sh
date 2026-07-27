@@ -112,6 +112,23 @@ fm_platform_winpid() { # <msys-pid>
   esac
 }
 
+# The pid identifying THIS process in the space firstmate records for session
+# ownership. Windows pids are the only universal space here: a native harness
+# such as claude.exe has no MSYS pid at all, so MSYS pids cannot identify every
+# harness while Windows pids can identify all of them. Off Windows this is just
+# $$, unchanged.
+#
+# $$ is deliberate rather than BASHPID: it stays the shell's own pid inside a
+# command substitution, so $(fm_platform_self_pid) reports the caller, not a
+# transient subshell.
+fm_platform_self_pid() {
+  if fm_platform_is_windows; then
+    fm_platform_winpid $$ || return 1
+  else
+    printf '%s\n' $$
+  fi
+}
+
 # One capture of MSYS `ps` (PID PPID PGID WINPID ...), cached for this shell.
 FM_PLATFORM_MSYS_SNAPSHOT=""
 fm_platform_msys_snapshot() {
@@ -145,6 +162,59 @@ fm_platform_msys_snapshot_ensure() {
 # MSYS parents to that root, then hand its WINPID to the Windows walk. Measured
 # end to end: msys 1771 -> 1513 (root, winpid 39548), then Windows 39548 ->
 # 39444 -> 32320 claude.exe, agreeing with CLAUDE_PID.
+# The MSYS ancestry chain from <msys-pid> as "<msyspid>\t<winpid>\t<command>"
+# lines, nearest first. One awk pass over the cached MSYS ps capture.
+#
+# Needed because a harness is not always a native .exe. MSYS ps preserves the
+# executed path (argv[0]), so a harness that is a script or a symlink - which is
+# how several verified adapters arrive on Git Bash, and how the test fixtures
+# build a fake harness - is visible HERE and nowhere else. The Win32 table only
+# ever shows bash.exe for those, so a walk that jumps straight to Win32 would
+# skip right past them. MSYS ps columns: PID PPID PGID WINPID TTY UID STIME
+# COMMAND, with COMMAND running to end of line.
+fm_platform_msys_chain() { # <msys-pid> [max-hops]
+  local pid=${1:-$$} hops=${2:-16}
+  fm_platform_is_windows || return 1
+  fm_platform_msys_snapshot_ensure || return 1
+  printf '%s\n' "$FM_PLATFORM_MSYS_SNAPSHOT" | awk -v start="$pid" -v maxhops="$hops" '
+    NR > 1 && $1 ~ /^[0-9]+$/ {
+      ppid[$1] = $2
+      winpid[$1] = $4
+      cmd = $8
+      for (i = 9; i <= NF; i++) cmd = cmd " " $i
+      command[$1] = cmd
+    }
+    END {
+      cur = start
+      for (i = 0; i < maxhops; i++) {
+        if (!(cur in ppid)) break
+        print cur "\t" winpid[cur] "\t" command[cur]
+        nxt = ppid[cur]
+        if (nxt == "" || nxt + 0 <= 1 || nxt == cur) break
+        cur = nxt
+      }
+    }
+  '
+}
+
+# COMMAND recorded by MSYS ps for a WINDOWS pid, when that pid is an MSYS
+# process. Lets liveness recognize a script harness the Win32 image name reports
+# only as bash.exe.
+fm_platform_msys_command_for_winpid() { # <winpid>
+  local pid=$1 out
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  fm_platform_is_windows || return 1
+  out=$(fm_platform_msys_snapshot | awk -v p="$pid" '
+    NR > 1 && $4 == p {
+      cmd = $8
+      for (i = 9; i <= NF; i++) cmd = cmd " " $i
+      print cmd
+      exit
+    }')
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out"
+}
+
 fm_platform_msys_root_winpid() {
   # Declared before assignment on purpose: `local a=$1 b=$a` does not see `a`
   # within the same declaration, which trips set -u.

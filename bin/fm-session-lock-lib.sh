@@ -31,6 +31,29 @@ fm_harness_ancestry_pid_windows() {
   # Start from the MSYS ancestry ROOT, not from this process. A spawned bash
   # records an already-exited Windows parent (MSYS fork emulation), so walking
   # Windows parents from here dead-ends at the first hop.
+  # Stage 1: the MSYS side. A harness that is a script or a symlink appears only
+  # here - the Win32 table shows bash.exe for all of them - so this must run
+  # before the bridge or those harnesses are skipped entirely. The WINPID is what
+  # gets returned, so stored identity stays in one pid space either way.
+  local msys_chain mwin mcmd mbase
+  msys_chain=$(fm_platform_msys_chain $$ 16) || msys_chain=""
+  if [ -n "$msys_chain" ]; then
+    # The MSYS pid is discarded: what gets recorded is always the WINPID.
+    while IFS=$'\t' read -r _ mwin mcmd; do
+      [ -n "$mwin" ] || continue
+      mbase=${mcmd##*/}
+      mbase=${mbase%% *}
+      mbase=${mbase%.[Ee][Xx][Ee]}
+      if printf '%s' "$mbase" | grep -qE "$FM_HARNESS_RE"; then
+        printf '%s\n' "$mwin"
+        return 0
+      fi
+    done <<EOF
+$msys_chain
+EOF
+  fi
+
+  # Stage 2: bridge to the Win32 table for a native harness such as claude.exe.
   pid=$(fm_platform_msys_root_winpid $$) || return 1
 
   # One awk pass for the whole chain, then loop in-process. Deliberately avoids
@@ -131,6 +154,16 @@ fm_harness_pid_alive() {
     name=$(fm_platform_win_name "$pid") || return 1
     base=${name%.[Ee][Xx][Ee]}
     printf '%s' "$base" | grep -qE "$FM_HARNESS_RE" && return 0
+    # A script or symlink harness shows up as bash.exe in the Win32 table, so
+    # the image name alone would call a healthy session dead and invite a lock
+    # steal. MSYS ps preserves the executed path, so ask it before giving up.
+    local mcmd mbase
+    if mcmd=$(fm_platform_msys_command_for_winpid "$pid" 2>/dev/null); then
+      mbase=${mcmd##*/}
+      mbase=${mbase%% *}
+      mbase=${mbase%.[Ee][Xx][Ee]}
+      printf '%s' "$mbase" | grep -qE "$FM_HARNESS_RE" && return 0
+    fi
     case "$base" in
       *node*|*python*)
         fm_platform_win_command "$pid" 2>/dev/null | grep -qE "$FM_HARNESS_RE" && return 0
