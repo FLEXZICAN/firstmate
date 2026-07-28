@@ -104,7 +104,7 @@ is_correct_claude_symlink() {
     "$AGENTS"|"./$AGENTS") return 0 ;;
   esac
   [ -e "$AGENTS" ] || return 1
-  if command -v python3 >/dev/null 2>&1; then
+  if fm_platform_python3_works; then
     python3 - "$CLAUDE" "$AGENTS" <<'PY'
 import os
 import sys

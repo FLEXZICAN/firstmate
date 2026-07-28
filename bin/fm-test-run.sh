@@ -116,30 +116,17 @@ now_iso() {
 # lazy in-function cache would live and die inside that subshell and re-probe
 # every time. Resolving here means subshells inherit the answer.
 #
-# `command -v python3` is not proof of a usable interpreter: Windows ships a
-# Microsoft Store "app execution alias" at python3 that resolves on PATH but
-# prints an install advertisement instead of running code, so the old probe
-# returned a non-numeric string and every caller's arithmetic failed. Probe by
-# executing, not by looking.
+# Whether python3 is usable is decided by fm_platform_python3_works, not by
+# looking for it on PATH - the old probe here trusted presence and got a
+# non-numeric string back, failing every caller's arithmetic.
 #
 # GNU date's %3N is the next-best source (Linux and Git Bash have it; stock
 # macOS date does not, where it yields a literal "N" and is rejected here).
-# True only when python3 both resolves AND runs. Windows ships a Microsoft Store
-# app-execution alias at python3 that satisfies `command -v` and then prints an
-# install advertisement instead of executing, so presence is not proof. Probed
-# once and cached, because every caller here is on a hot path.
-FM_PYTHON3_OK=""
-python3_works() {
-  if [ -z "$FM_PYTHON3_OK" ]; then
-    if command -v python3 >/dev/null 2>&1 \
-      && [ "$(python3 -c 'print(1)' 2>/dev/null)" = 1 ]; then
-      FM_PYTHON3_OK=yes
-    else
-      FM_PYTHON3_OK=no
-    fi
-  fi
-  [ "$FM_PYTHON3_OK" = yes ]
-}
+# Thin alias so this file's call sites stay readable. The single owner of "does
+# python3 actually run" is fm_platform_python3_works in bin/fm-platform-lib.sh,
+# sourced above - this bug reappeared three times from per-file copies, so there
+# is exactly one implementation now.
+python3_works() { fm_platform_python3_works; }
 
 fm_probe_now_ms_mode() {
   local probe

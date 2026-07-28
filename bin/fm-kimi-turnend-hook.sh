@@ -17,6 +17,10 @@
 #   fm-kimi-turnend-hook.sh remove
 set -u
 
+# Presence of python3 is not proof it runs; see fm_platform_python3_works.
+# shellcheck source=bin/fm-platform-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-platform-lib.sh"
+
 case "${1:-}" in
   install|remove) ACTION=$1 ;;
   -h|--help)
@@ -33,8 +37,8 @@ if [ -z "${HOME:-}" ]; then
   printf 'fm-kimi-turnend-hook: refused: HOME is unset.\n' >&2
   exit 1
 fi
-if ! command -v python3 >/dev/null 2>&1; then
-  printf 'fm-kimi-turnend-hook: refused: python3 with tomllib is required to validate config.toml.\n' >&2
+if ! fm_platform_python3_works; then
+  printf 'fm-kimi-turnend-hook: refused: a working python3 with tomllib is required to validate config.toml.\n' >&2
   exit 1
 fi
 if [ "$ACTION" = install ] && ! command -v jq >/dev/null 2>&1; then

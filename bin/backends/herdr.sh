@@ -65,6 +65,9 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # Shared composer-content classifier (empty|pending|unknown, and the fleet-wide
 # dead-shell-vs-agent-composer rule). Owned by bin/fm-composer-lib.sh, reused by
 # every backend so the decision cannot drift.
+# Presence of python3 is not proof it runs; see fm_platform_python3_works.
+# shellcheck source=bin/fm-platform-lib.sh
+. "$FM_BACKEND_HERDR_ROOT/bin/fm-platform-lib.sh"
 # shellcheck source=bin/fm-composer-lib.sh
 . "$FM_BACKEND_HERDR_ROOT/bin/fm-composer-lib.sh"
 
@@ -732,8 +735,8 @@ fm_backend_herdr_projection_order_best_effort() {  # <session> <created-workspac
   esac
   [ "$current" != "$desired" ] || return 0
 
-  command -v python3 >/dev/null 2>&1 || {
-    echo "warning: herdr presentation ordering requires python3; leaving worker in Herdr's current order" >&2
+  fm_platform_python3_works || {
+    echo "warning: herdr presentation ordering requires a working python3; leaving worker in Herdr's current order" >&2
     return 0
   }
   protocol=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.client.protocol // empty' 2>/dev/null)
@@ -2327,7 +2330,7 @@ fm_backend_herdr_events_capable() {  # <session>
   esac
   fm_backend_herdr_tool_check || return 1
   if [ -z "${FM_BACKEND_HERDR_EVENT_READER:-}" ]; then
-    command -v python3 >/dev/null 2>&1 || return 1
+    fm_platform_python3_works || return 1
   fi
   protocol=$(herdr status --json 2>/dev/null | jq -r '.client.protocol // empty' 2>/dev/null)
   case "$protocol" in ''|*[!0-9]*) return 1 ;; esac

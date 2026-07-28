@@ -48,6 +48,10 @@ set -eu
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 1
 
+# Presence of python3 is not proof it runs; see fm_platform_python3_works.
+# shellcheck source=bin/fm-platform-lib.sh
+. "$ROOT/bin/fm-platform-lib.sh"
+
 JOBS=4
 JSON_PATH=
 LIST_ONLY=0
@@ -75,7 +79,7 @@ now_iso() {
 }
 
 now_ms() {
-  if command -v python3 >/dev/null 2>&1; then
+  if fm_platform_python3_works; then
     python3 -c 'import time; print(int(time.time() * 1000))'
   else
     echo $(($(date +%s) * 1000))

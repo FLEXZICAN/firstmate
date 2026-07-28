@@ -53,6 +53,35 @@ fm_platform_is_macos() {
   [ "$(fm_platform_uname)" = Darwin ]
 }
 
+# True only when python3 both RESOLVES and RUNS.
+#
+# `command -v python3` is not proof of an interpreter. Windows ships a Microsoft
+# Store "app execution alias" at python3 that resolves on PATH and then prints an
+# install advertisement instead of executing - and exits 0 while doing it. Every
+# caller that trusted presence therefore either produced no output and failed its
+# caller, or worse, passed silently: bin/fm-doc-audience-check.sh execs python3
+# directly, so the entire documentation audience check reported success while
+# validating nothing.
+#
+# This is not a Windows-only correctness rule; a broken interpreter anywhere
+# should be treated the same way. On a host where python3 genuinely works the
+# answer is unchanged, so POSIX behavior is identical.
+#
+# Probed once and cached. Callers should treat a false result as "no python3"
+# and fail loudly rather than continuing with a silent gap.
+FM_PLATFORM_PYTHON3_OK=""
+fm_platform_python3_works() {
+  if [ -z "$FM_PLATFORM_PYTHON3_OK" ]; then
+    if command -v python3 >/dev/null 2>&1 \
+      && [ "$(python3 -c 'print(1)' 2>/dev/null)" = 1 ]; then
+      FM_PLATFORM_PYTHON3_OK=yes
+    else
+      FM_PLATFORM_PYTHON3_OK=no
+    fi
+  fi
+  [ "$FM_PLATFORM_PYTHON3_OK" = yes ]
+}
+
 # Ensure `ln -s` creates real symlinks rather than silently copying. Idempotent,
 # and a no-op everywhere except Windows. Exporting MSYS is enough for child
 # processes: the MSYS runtime reads it at process start, so every later `ln`,

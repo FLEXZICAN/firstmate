@@ -11,6 +11,17 @@ set -eu
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+
+# This script execs python3 with no guard, so a python3 that resolves but does
+# not run made the whole audience check exit 0 having validated nothing - the
+# most dangerous shape of failure, because a silent pass looks like coverage.
+# shellcheck source=bin/fm-platform-lib.sh
+. "$ROOT/bin/fm-platform-lib.sh"
+fm_platform_python3_works || {
+  printf '%s\n' "fm-doc-audience-check.sh: a working python3 is required; found none that executes" >&2
+  exit 2
+}
+
 exec python3 - "$@" <<'PY'
 from __future__ import annotations
 
