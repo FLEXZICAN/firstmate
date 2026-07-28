@@ -310,6 +310,17 @@ test_source_graph_boundaries_keep_every_owner() {
 # The closure is read from the `# shellcheck source=bin/...` directives the
 # production scripts already carry, so there is no second dependency list to keep
 # in sync: the thing lint already enforces is the thing this reads.
+#
+# LIMITS, stated so nobody reads a pass here as proof of completeness. Fixtures
+# are shell, and this is static detection of four install idioms actually used in
+# this suite:
+#   1. a literal        cp "$ROOT/bin/x.sh" ...
+#   2. one variable hop  RUNNER="$ROOT/bin/x.sh"; cp "$RUNNER" ...
+#   3. a basename list   LIST="a.sh b.sh"; for f in $LIST; do cp "$ROOT/bin/$f"
+#   4. a written stub    cat > "$fake/bin/x.sh"
+# Each was added only after a real breakage escaped the previous version, twice
+# reaching CI. A genuinely dynamic fixture will still slip through; when one
+# does, extend this rather than trusting the green.
 fixture_installed_scripts() { # <test-file> -> basenames it installs
   # Backslash continuations are joined first: fixtures routinely install several
   # files in one multi-line `cp a b c dest`, and a line-at-a-time scan sees only
@@ -335,9 +346,22 @@ fixture_installed_scripts() { # <test-file> -> basenames it installs
           var[kv[1]] = path
           next
         }
+        # A whitespace-separated list of basenames, later copied in a loop as
+        # `cp "$ROOT/bin/$f"`. Recorded unconditionally because the loop that
+        # consumes it is a separate statement.
+        /^[A-Za-z_][A-Za-z0-9_]*="[a-zA-Z0-9._ -]*\.sh"?[[:space:]]*$/ {
+          body = $0
+          sub(/^[^=]*="?/, "", body)
+          sub(/"?[[:space:]]*$/, "", body)
+          n = split(body, items, /[[:space:]]+/)
+          for (i = 1; i <= n; i++) if (items[i] ~ /\.sh$/) listed[items[i]] = 1
+          next
+        }
         # An install line contributes every bin path it names, literal or via a
         # remembered variable.
         /(^|[;&|(]|[[:space:]])(cp|ln -s) / {
+          # `cp "$ROOT/bin/$var"` inside a loop installs whatever the list held.
+          if ($0 ~ /\$ROOT\/bin\/\$\{?[A-Za-z_]/) for (k in listed) print k
           line = $0
           while (match(line, /\$ROOT\/bin\/[a-zA-Z0-9._\/-]+\.sh/)) {
             p = substr(line, RSTART, RLENGTH)
