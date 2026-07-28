@@ -129,6 +129,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 SUB_HOME_MARKER=".fm-secondmate-home"
+# shellcheck source=bin/fm-platform-lib.sh
+. "$SCRIPT_DIR/fm-platform-lib.sh"
 # shellcheck source=bin/fm-ff-lib.sh
 . "$SCRIPT_DIR/fm-ff-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
@@ -235,6 +237,13 @@ SPAWN_TASK_LOCK=
 SPAWN_TASK_LOCK_HELD=0
 CONFIG_INHERIT_LOCK=
 CONFIG_INHERIT_LOCK_HELD=0
+# A durable treehouse lease outlives the process that took it, by design. That
+# is what makes it safe against a crashed crewmate, and it is also why a spawn
+# that dies between the lease and the metadata write must hand the worktree
+# back itself: nothing else knows the lease exists yet. Cleared once
+# state/<id>.meta records the worktree, after which teardown owns the return.
+TREEHOUSE_LEASE_ABORT_CLEANUP=0
+TREEHOUSE_LEASE_DIR=
 
 parse_orca_worktree_result() {
   local raw=$1 rest
@@ -299,6 +308,13 @@ spawn_abort_cleanup() {
           } > "$STATE/$ID.meta" 2>/dev/null || true
         fi
       fi
+    fi
+  fi
+  if [ "$TREEHOUSE_LEASE_ABORT_CLEANUP" = 1 ]; then
+    TREEHOUSE_LEASE_ABORT_CLEANUP=0
+    if [ -n "$TREEHOUSE_LEASE_DIR" ]; then
+      ( cd "$PROJ_ABS" && treehouse return --force "$TREEHOUSE_LEASE_DIR" ) >/dev/null 2>&1 \
+        || echo "warning: could not return the leased worktree $TREEHOUSE_LEASE_DIR after a failed spawn; release it with 'treehouse return --force $TREEHOUSE_LEASE_DIR'" >&2
     fi
   fi
   if [ "$SPAWN_TASK_LOCK_HELD" = 1 ]; then
@@ -1187,6 +1203,78 @@ spawn_send_key() {  # <target> <key>
   esac
 }
 
+# --- Windows: make the pane a POSIX shell before typing POSIX at it ----------
+#
+# fm_platform_windows_pane_bash_commands explains why this is needed and why the
+# candidate command lines are safe to try in either shell. What is left here is
+# deciding which one worked, which is done by asking the pane rather than by
+# assuming: send a line whose ANSWER only bash can produce, then read it back.
+#
+# Both probes are written so the ECHO of the command itself cannot be mistaken
+# for its output: the typed line carries an unexpanded `${...}`, and only a shell
+# that actually expanded it produces the string being matched. Matching is
+# fixed-string throughout - a task id may contain `.` and a worktree path
+# certainly does (~/.treehouse/...), and neither should ever act as a wildcard.
+
+spawn_pane_settle() { sleep "${FM_SPAWN_PANE_PROBE_SETTLE:-0.5}"; }
+
+spawn_pane_wait_for_text() {  # <needle> [tries]
+  local needle=$1 tries=${2:-12} i=0 out
+  while [ "$i" -lt "$tries" ]; do
+    out=$(fm_backend_capture "$BACKEND" "$T" 200 "$W" 2>/dev/null || true)
+    printf '%s\n' "$out" | grep -qF -- "$needle" && return 0
+    spawn_pane_settle
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# Leave the pane running the same MINGW64 Git Bash firstmate runs in. Idempotent
+# in effect: a pane that is already bash answers the first probe and nothing is
+# launched.
+spawn_windows_enter_posix_shell() {
+  local marker="__FM_SH_${ID}__" probe needle cmd
+  # Only a POSIX shell turns ${BASH_VERSION:+ok} into "ok". PowerShell reads the
+  # braced form as a variable name and cmd echoes it verbatim, so neither can
+  # produce the needle even by accident.
+  probe="echo \"${marker}\${BASH_VERSION:+ok}${marker}\""
+  needle="${marker}ok${marker}"
+  spawn_send_text_line "$T" "$probe" || true
+  spawn_pane_settle
+  spawn_pane_wait_for_text "$needle" 3 && return 0
+  while IFS= read -r cmd; do
+    [ -n "$cmd" ] || continue
+    spawn_send_text_line "$T" "$cmd" || continue
+    spawn_pane_settle
+    spawn_send_text_line "$T" "$probe" || continue
+    spawn_pane_wait_for_text "$needle" 8 && return 0
+  done <<EOF
+$(fm_platform_windows_pane_bash_commands || true)
+EOF
+  echo "error: could not get a POSIX shell in window $T; every command firstmate sends the crewmate from here on is POSIX, so launching would leave the agent unstarted. Inspect the window" >&2
+  return 1
+}
+
+# Put the pane in DIR and prove it landed there.
+#
+# On POSIX the pane is already in the worktree because `treehouse get` put it
+# there. Here the pane never ran treehouse, so it is still wherever its shell
+# started - and that is not necessarily even the directory the tab was created
+# with: a PowerShell profile that ends in `Set-Location` (a common dotfiles
+# shape, and the one on the machine this was developed against) moves every new
+# pane regardless of --cwd. Launching without this check would start the agent
+# in whatever directory the profile chose, which can be the primary checkout.
+spawn_windows_enter_dir() {  # <dir>
+  local dir=$1 marker="__FM_WT_${ID}__" dir_real
+  dir_real=$(cd "$dir" 2>/dev/null && pwd -P) || dir_real=$dir
+  # ${PWD} is braced on purpose: the trailing marker starts with an underscore,
+  # so a bare $PWD would be read as one long variable name and expand to nothing.
+  spawn_send_text_line "$T" "cd $(shell_quote "$dir_real") && echo \"${marker}\${PWD}${marker}\"" || true
+  spawn_pane_wait_for_text "${marker}${dir_real}${marker}" 12 && return 0
+  echo "error: window $T did not enter $dir_real; refusing to launch the agent in an unknown directory. Inspect the window" >&2
+  return 1
+}
+
 kimi_capture() {
   fm_backend_capture "$BACKEND" "$T" 120 "$W" 2>/dev/null || true
 }
@@ -1238,7 +1326,58 @@ kimi_spawn_fail() {  # <detail>
   echo "error: $1; inspect window $T" >&2
 }
 
-if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ] && fm_platform_is_windows; then
+  # Windows takes the worktree by durable lease and is TOLD the path, instead of
+  # typing `treehouse get` into the pane and inferring the path from where the
+  # pane's shell ends up. The inference below cannot work here, for two
+  # independent reasons, either of which alone is fatal:
+  #
+  #   * Nothing reports the pane's live directory. The poll reads a backend's
+  #     foreground-process cwd; herdr's `pane get` simply omits foreground_cwd on
+  #     Windows. The field is declared in the shipped API schema as
+  #     ["string","null"] and is absent from the response for every pane on the
+  #     system, so `// empty` yields empty on every one of the 60 reads and the
+  #     wait always times out - even when treehouse succeeded. The sibling
+  #     `cwd` field is no substitute: it is the pane's cwd at creation and stays
+  #     frozen (measured: still C:\Development after the shell had moved).
+  #   * The subshell is not a POSIX shell. `treehouse get` opens cmd.exe here,
+  #     so the marker-probe fallback the zellij and cmux adapters use for exactly
+  #     this gap ("printf ...; pwd; printf ...") is not runnable either.
+  #
+  # Leasing sidesteps both by not asking the question. treehouse prints the
+  # absolute path on stdout with banners on stderr, which is already how
+  # bin/fm-home-seed.sh acquires a secondmate home, and bin/fm-bootstrap.sh
+  # already refuses to dispatch on a treehouse too old to support it. It is also
+  # simply better evidence: the path is authoritative rather than inferred, so
+  # the two-consecutive-reads heuristic guarding against a transient stale path
+  # has nothing left to guard.
+  #
+  # The lease's own cost is that it outlives the process - see
+  # TREEHOUSE_LEASE_ABORT_CLEANUP. Teardown needs no change: it already returns
+  # the recorded worktree with `treehouse return --force`.
+  #
+  # POSIX keeps the typed-and-polled path below untouched, on purpose. It is
+  # verified there, this fork tracks upstream by merge, and confining the change
+  # to a branch upstream does not have keeps those merges clean.
+  WT_WIN=$( ( cd "$PROJ_ABS" && treehouse get --lease --lease-holder "fm-$ID" ) | tail -n 1 ) || {
+    echo "error: treehouse get --lease failed to lease a worktree in $PROJ_ABS" >&2
+    exit 1
+  }
+  [ -n "$WT_WIN" ] || {
+    echo "error: treehouse get --lease reported no worktree for $PROJ_ABS" >&2
+    exit 1
+  }
+  TREEHOUSE_LEASE_DIR=$WT_WIN
+  TREEHOUSE_LEASE_ABORT_CLEANUP=1
+  # treehouse speaks native Windows paths; everything downstream (git -C, cd,
+  # .git/info/exclude, the recorded worktree=) needs the POSIX form.
+  WT=$(cygpath -u "$WT_WIN" 2>/dev/null) || WT=""
+  [ -n "$WT" ] && [ -d "$WT" ] || {
+    echo "error: leased worktree '$WT_WIN' did not resolve to a directory; inspect it with 'treehouse status'" >&2
+    exit 1
+  }
+  validate_spawn_worktree "treehouse get --lease" "$T"
+elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
@@ -1473,6 +1612,9 @@ META_WINDOW=$T
   fi
 } > "$STATE/$ID.meta"
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
+# worktree= is now recorded, so teardown can return the lease and this spawn no
+# longer has to.
+TREEHOUSE_LEASE_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")
@@ -1493,6 +1635,14 @@ LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
 if [ "$KIND" = secondmate ]; then
   sq_home=$(shell_quote "$PROJ_ABS")
   LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home $LAUNCH"
+fi
+# Windows: the pane's shell is PowerShell or cmd and it has not moved into the
+# worktree, because nothing typed `treehouse get` at it. Settle both before the
+# first POSIX line below. Orca is excluded for the same reason it skips
+# treehouse - it owns its own terminal - and cannot occur here anyway.
+if fm_platform_is_windows && [ "$BACKEND" != orca ]; then
+  spawn_windows_enter_posix_shell || exit 1
+  spawn_windows_enter_dir "$WT" || exit 1
 fi
 # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
 # process (go build, go test, ...) inherit it. Sent before the launch command so

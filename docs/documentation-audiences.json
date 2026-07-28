@@ -320,6 +320,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/windows-gitbash.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/zellij-backend.md",
       "audience": "operator-current"
     },

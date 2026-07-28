@@ -213,6 +213,21 @@ ROUTED=$(bash -c "
 [ "$ROUTED" = posix ] || fail "a Linux uname must route to the POSIX lsof path, got '$ROUTED'"
 pass "a POSIX uname routes the staleness proof to the lsof path, not the Windows one"
 
+# --- getting a POSIX shell into a Windows pane -------------------------------
+
+# Off Windows there is nothing to convert: the pane's shell is already POSIX, so
+# the seam must refuse rather than hand fm-spawn a command to type. Asserted by
+# routing so it holds on any host.
+if bash -c "
+  export FM_PLATFORM_UNAME=Linux
+  # shellcheck source=/dev/null
+  . '$PLATFORM_LIB'
+  fm_platform_windows_pane_bash_commands
+" >/dev/null 2>&1; then
+  fail "a POSIX host must not produce pane bash-entry commands"
+fi
+pass "a POSIX uname produces no pane bash-entry commands, leaving the pane shell alone"
+
 # --- the guarantee actually holds on a real Windows host ---------------------
 
 if ! (
@@ -325,3 +340,54 @@ pass "on Windows an aged unheld git lock is provably stale, while fresh and abse
   exit 0
 ) || fail "an aged but still-held git lock must never be declared stale"
 pass "an aged git lock that is still held is refused, protecting a live git operation"
+
+# --- pane bash-entry commands on a real Windows host -------------------------
+#
+# The trap being guarded is not theoretical: a bare `bash` typed into PowerShell
+# resolves to C:\Windows\System32\bash.exe, the WSL entry point, and would put
+# the crewmate in a different operating system (or, with no distro installed,
+# fail with execvpe). Every emitted command must therefore name an absolute
+# path, and both shell-quoting forms must be present because the pane's shell is
+# not known in advance.
+PANE_CMDS=$(
+  # shellcheck source=/dev/null
+  . "$PLATFORM_LIB"
+  fm_platform_windows_pane_bash_commands
+) || fail "a Windows host must produce at least one pane bash-entry command"
+
+[ -n "$PANE_CMDS" ] || fail "pane bash-entry commands were empty on a Windows host"
+
+# A literal backslash carried in a variable, so the globs below need no escaping
+# and cannot be silently broken by an editor that rewrites backslash pairs.
+# Written as an octal escape rather than '\' so the source itself is unambiguous.
+BS=$(printf '\134')
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  case "$line" in
+    *[A-Za-z]:"$BS"*bash.exe*) ;;
+    *) fail "pane bash-entry command does not name an absolute launcher: $line" ;;
+  esac
+  case "$line" in
+    *' --login -i') ;;
+    *) fail "pane bash-entry command must open an interactive login shell: $line" ;;
+  esac
+done <<EOF
+$PANE_CMDS
+EOF
+pass "every pane bash-entry command names an absolute launcher, never a bare 'bash' that WSL would claim"
+
+printf '%s\n' "$PANE_CMDS" | grep -q "^& '" \
+  || fail "no PowerShell-form pane bash-entry command was produced"
+printf '%s\n' "$PANE_CMDS" | grep -q '^"' \
+  || fail "no cmd-form pane bash-entry command was produced"
+pass "both the PowerShell and cmd quoting forms are offered, so the pane's shell need not be known in advance"
+
+# Git for Windows' launcher sets MSYSTEM=MINGW64; the raw MSYS binary under
+# usr/bin does not, and yields a different PATH and runtime from the one
+# firstmate resolved its own tools against. Preference order is load-bearing.
+FIRST_LAUNCHER=$(printf '%s\n' "$PANE_CMDS" | head -n 1)
+case "$FIRST_LAUNCHER" in
+  *"${BS}usr${BS}bin${BS}bash.exe"*)
+    fail "the raw MSYS bash was preferred over the MINGW64 launcher: $FIRST_LAUNCHER" ;;
+esac
+pass "the MINGW64 launcher is preferred over the raw MSYS binary, keeping the crewmate on firstmate's own runtime"

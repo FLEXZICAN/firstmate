@@ -21,6 +21,11 @@ set -u
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-tangle-lib.sh"
 
+# fm_platform_is_windows: the worktree-acquisition assertions below differ by
+# platform because the acquisition channel does.
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-platform-lib.sh"
+
 TMP_ROOT=$(fm_test_tmproot fm-tangle-guard)
 fm_git_identity fmtest fmtest@example.invalid
 
@@ -149,27 +154,13 @@ test_brief_assertion_precedes_branch() {
 
 # --- GUARD 1b: fm-spawn isolation abort -------------------------------------
 
-# A fake tmux that reports FM_FAKE_PANE_PATH as the post-`treehouse get` pane cwd
-# (so the spawn's worktree-resolution loop resolves to a path we control), names
-# the session on '#S', and swallows window ops. Echoes the fakebin dir.
+# Feeds FM_FAKE_PANE_PATH as the worktree the spawn resolves, through whichever
+# channel this host's branch reads (tests/lib.sh "spawn fixtures").
 make_spawn_fakebin() {
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
-  cat > "$fakebin/tmux" <<'SH'
-#!/usr/bin/env bash
-set -u
-case "$*" in
-  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
-esac
-case "${1:-}" in
-  display-message) printf 'firstmate\n'; exit 0 ;;
-  list-windows) exit 0 ;;
-  has-session|new-session|new-window|send-keys) exit 0 ;;
-esac
-exit 0
-SH
-  chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" treehouse
+  fm_fake_spawn_tmux "$fakebin"
+  fm_fake_treehouse "$fakebin"
   printf '%s\n' "$fakebin"
 }
 
@@ -232,23 +223,8 @@ test_spawn_isolation_abort() {
 make_spawn_record_fakebin() {
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
-  cat > "$fakebin/tmux" <<'SH'
-#!/usr/bin/env bash
-set -u
-[ -n "${FM_TMUX_REC:-}" ] && printf 'tmux %s\n' "$*" >> "$FM_TMUX_REC"
-case "$*" in
-  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
-esac
-case "${1:-}" in
-  display-message) printf 'firstmate\n'; exit 0 ;;
-  new-window) printf '%s\n' "@spawnwid"; exit 0 ;;
-  list-windows) exit 0 ;;
-  has-session|new-session|send-keys|set-window-option) exit 0 ;;
-esac
-exit 0
-SH
-  chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" treehouse
+  fm_fake_spawn_tmux "$fakebin" "@spawnwid"
+  fm_fake_treehouse "$fakebin"
   printf '%s\n' "$fakebin"
 }
 
@@ -293,10 +269,28 @@ test_spawn_tmux_window_construction() {
     "must disable allow-rename on the spawned window"
 
   # Bug 2 fix (b): treehouse-get and the worktree wait loop target the stable id.
-  assert_grep "send-keys -t @spawnwid treehouse get Enter" "$rec" \
-    "treehouse get must be sent to the stable window id"
-  assert_grep "display-message -p -t @spawnwid #{pane_current_path}" "$rec" \
-    "the worktree wait loop must query the stable window id, not the name"
+  #
+  # This guarantee is specific to the POSIX acquisition channel and has no
+  # Windows counterpart, rather than a differently-spelled one: Windows leases
+  # the worktree out-of-band, so it never types `treehouse get` and never polls
+  # a pane cwd, and there is no read left for a lost window name to misdirect
+  # (tests/lib.sh "spawn fixtures", docs/windows-gitbash.md).
+  #
+  # What Windows must show instead is that the pane was moved into the worktree
+  # before the harness launched, in the SAME window the launch goes to - a check
+  # against a different window than the one being launched in would prove
+  # nothing.
+  if fm_platform_is_windows; then
+    assert_no_grep "send-keys -t @spawnwid treehouse get Enter" "$rec" \
+      "the leased path must not also type treehouse get into the pane"
+    assert_grep "send-keys -t firstmate:fm-rec-win-gg7 cd " "$rec" \
+      "the pane must be moved into the worktree in the window the harness launches in"
+  else
+    assert_grep "send-keys -t @spawnwid treehouse get Enter" "$rec" \
+      "treehouse get must be sent to the stable window id"
+    assert_grep "display-message -p -t @spawnwid #{pane_current_path}" "$rec" \
+      "the worktree wait loop must query the stable window id, not the name"
+  fi
 
   pass "fm-spawn: appends windows by session-colon, pins the name, and targets the window id"
 }

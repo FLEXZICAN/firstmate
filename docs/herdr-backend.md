@@ -265,6 +265,11 @@ Tests use thin compatibility wrappers in `tests/herdr-test-safety.sh` and never 
 - OpenCode 1.18.4 can accept Enter while busy without clearing the composer.
   The tmux backend has a busy-queue fallback, but Herdr still reports this case as submit pending and needs a separate adapter fix.
 - Only tmux and Herdr can host the away-mode supervisor terminal.
+- On Windows, `pane get` does not return `foreground_cwd`.
+  The field is declared in the shipped API schema as `["string","null"]`, but it is absent from the response for every pane, so `fm_backend_herdr_current_path` yields empty forever.
+  Measured against 0.7.5-preview.
+  The sibling `cwd` is no substitute: it is the pane's directory at creation and never follows a later `cd`.
+  Worktree discovery therefore does not use this field on Windows; see [windows-gitbash.md](windows-gitbash.md).
 
 ## Regression entry points
 

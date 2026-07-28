@@ -501,3 +501,58 @@ fm_platform_win_pid_alive() { # <winpid>
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   ps -W 2>/dev/null | awk -v p="$pid" '$4 == p { found = 1; exit } END { exit !found }'
 }
+
+# --- Getting a POSIX shell into a Windows crewmate pane -----------------------
+#
+# Every command firstmate types into a crewmate pane is POSIX, and not
+# incidentally so. The harness launch line carries `VAR=value cmd` env prefixes
+# (bin/fm-spawn.sh builds `FM_PI_HARNESS=... <cmd>` and the secondmate's
+# `FM_HOME=... <cmd>`), which is shell syntax no Windows-native shell accepts.
+# The pane's own shell is whatever the terminal launched, and on Windows that is
+# PowerShell or cmd, never bash: herdr picks it from `default_shell` in the
+# user's global config.toml, and `tab create` exposes no per-tab override.
+#
+# So the pane is switched to the same MINGW64 Git Bash firstmate itself runs in,
+# once, before any POSIX text is sent. The alternative - teaching fm-spawn and
+# every harness adapter to emit both POSIX and PowerShell forms of every command
+# - would spread Windows into code that is otherwise platform-neutral, and would
+# have to be maintained in step forever.
+#
+# Two verified traps this returns command lines for rather than guessing at:
+#
+#   * The launcher must be named by ABSOLUTE PATH. A bare `bash` from PowerShell
+#     resolves to C:\Windows\System32\bash.exe - the WSL entry point - not to Git
+#     Bash. On a machine with no WSL distro installed that fails with
+#     "CreateProcessEntryCommon:502: execvpe /bin/bash failed 2"; on a machine
+#     WITH one it would silently land the crewmate in an entirely different OS.
+#   * <root>\bin\bash.exe and <root>\usr\bin\bash.exe are NOT interchangeable.
+#     The first is Git for Windows' launcher and sets MSYSTEM=MINGW64; the second
+#     is the raw MSYS binary and yields MSYSTEM=MSYS, a different PATH and a
+#     different runtime from the one firstmate resolved its own tools against.
+#     The launcher is therefore preferred and the raw binary is only a fallback.
+#
+# The two quoting forms are mutually safe, which is what makes trying them in
+# order acceptable: `& '<path>' ...` runs the launcher in PowerShell and is a
+# syntax error in cmd, while `"<path>" ...` runs it in cmd and merely echoes the
+# string in PowerShell. Neither can do damage in the shell it is not meant for.
+# The caller settles which one worked by probing the pane, so nothing here
+# depends on knowing the pane's shell in advance.
+fm_platform_windows_pane_bash_commands() {
+  fm_platform_is_windows || return 1
+  command -v cygpath >/dev/null 2>&1 || return 1
+  local root launcher raw emitted=0
+  if root=$(cygpath -w / 2>/dev/null) && [ -n "$root" ]; then
+    root=${root%\\}
+    launcher="$root\\bin\\bash.exe"
+    printf "& '%s' --login -i\\n" "$launcher"
+    printf '"%s" --login -i\n' "$launcher"
+    emitted=1
+  fi
+  if raw=$(cygpath -w "${BASH:-/usr/bin/bash}" 2>/dev/null) && [ -n "$raw" ] \
+    && [ "$raw" != "${launcher:-}" ]; then
+    printf "& '%s' --login -i\\n" "$raw"
+    printf '"%s" --login -i\n' "$raw"
+    emitted=1
+  fi
+  [ "$emitted" = 1 ]
+}

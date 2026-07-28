@@ -100,6 +100,86 @@ SH
   done
 }
 
+# --- spawn fixtures ---------------------------------------------------------
+#
+# fm-spawn learns the crew worktree through a different channel on each
+# platform, so a spawn fixture has to feed both or it only tests one of them:
+#
+#   POSIX    types `treehouse get` into the pane, then polls the backend for the
+#            pane's cwd - modelled by the fake tmux's #{pane_current_path}.
+#   Windows  runs `treehouse get --lease` itself and reads the path from stdout,
+#            because no Windows backend reports a pane's live directory
+#            (docs/windows-gitbash.md).
+#
+# Both helpers below key off the same FM_FAKE_PANE_PATH, so one fixture value
+# injects the same worktree whichever branch the host takes.
+
+# A treehouse stub that exits 0 for everything, and additionally prints
+# FM_FAKE_PANE_PATH for `get --lease`.
+fm_fake_treehouse() {  # <fakebin>
+  local fakebin=$1
+  cat > "$fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+set -u
+lease=0
+for arg in "$@"; do
+  [ "$arg" = --lease ] && lease=1
+done
+if [ "${1:-}" = get ] && [ "$lease" = 1 ]; then
+  printf '%s\n' "${FM_FAKE_PANE_PATH:-}"
+fi
+exit 0
+SH
+  chmod +x "$fakebin/treehouse"
+}
+
+# A fake tmux for spawn fixtures: reports FM_FAKE_PANE_PATH as the pane cwd,
+# names the session on '#S', optionally reports a stable new-window id, and
+# swallows every other window op.
+#
+# It also models the pane as a POSIX shell, which the Windows branch needs: that
+# branch verifies it has a POSIX shell and that the pane actually entered the
+# worktree, by sending a line and reading the answer back. Only lines beginning
+# `echo ` or `cd ` are evaluated, so the probes are answered while a launch
+# command sent through this fixture can never be executed by it.
+#
+# Every invocation is appended to FM_TMUX_REC when that is set, so a caller that
+# needs to pin command construction uses the same fake as everyone else.
+fm_fake_spawn_tmux() {  # <fakebin> [new-window-id]
+  local fakebin=$1 new_window_id=${2:-}
+  cat > "$fakebin/tmux" <<SH
+#!/usr/bin/env bash
+set -u
+NEW_WINDOW_ID='$new_window_id'
+SH
+  cat >> "$fakebin/tmux" <<'SH'
+TRANSCRIPT="${0%/*}/pane-transcript.log"
+[ -n "${FM_TMUX_REC:-}" ] && printf 'tmux %s\n' "$*" >> "$FM_TMUX_REC"
+case "$*" in
+  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+esac
+case "${1:-}" in
+  display-message) printf 'firstmate\n'; exit 0 ;;
+  new-window) [ -z "$NEW_WINDOW_ID" ] || printf '%s\n' "$NEW_WINDOW_ID"; exit 0 ;;
+  capture-pane) [ -f "$TRANSCRIPT" ] && cat "$TRANSCRIPT"; exit 0 ;;
+  send-keys)
+    # `send-keys -t <target> <text> Enter` is the submitted-line form. Record the
+    # line as a real pane would echo it, then answer the probes.
+    if [ "${!#}" = Enter ] && [ "$#" -ge 4 ]; then
+      line=${*:$(($# - 1)):1}
+      printf '%s\n' "$line" >> "$TRANSCRIPT"
+      case "$line" in
+        echo\ *|cd\ *) bash -c "$line" >> "$TRANSCRIPT" 2>/dev/null || true ;;
+      esac
+    fi
+    exit 0
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/tmux"
+}
+
 # --- deterministic git identity and fixtures --------------------------------
 
 # fm_git_identity [name] [email]: export a fixed author/committer identity so
