@@ -12,7 +12,7 @@
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-platform-lib.sh"
 
 # Known harness command names; extend when a new adapter is verified.
-FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$'
+FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$|^pi-signed$'
 
 # Windows ancestry walk. Separate from the POSIX one below because MSYS ps
 # cannot see the harness at all: it lists only MSYS processes and reports this
@@ -148,7 +148,8 @@ fm_harness_ancestry_pid() {
 # harness reads as dead. That direction of error is the dangerous one, because a
 # lock held by a healthy session would look stale and stealable.
 fm_harness_pid_alive() {
-  local pid=$1 comm name base
+  # `args` is upstream's; `name`/`base` are the Windows path's.
+  local pid=$1 comm args name base
   if fm_platform_is_windows; then
     fm_platform_win_pid_alive "$pid" || return 1
     name=$(fm_platform_win_name "$pid") || return 1
@@ -173,7 +174,16 @@ fm_harness_pid_alive() {
   fi
   kill -0 "$pid" 2>/dev/null || return 1
   comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
-  printf '%s' "$(basename "$comm") $(ps -o args= -p "$pid" 2>/dev/null)" | grep -qE "$FM_HARNESS_RE"
+  if printf '%s' "$(basename "$comm")" | grep -qE "$FM_HARNESS_RE"; then
+    return 0
+  fi
+  case "$comm" in
+    *node*|*python*)
+      args=$(ps -o args= -p "$pid" 2>/dev/null)
+      printf '%s' "$args" | grep -qE "$FM_HARNESS_RE"
+      ;;
+    *) return 1 ;;
+  esac
 }
 
 # True when state dir $1 holds a session lock whose pid is the harness ancestor
