@@ -18,8 +18,13 @@
 set -u
 
 # Presence of python3 is not proof it runs; see fm_platform_python3_works.
+#
+# Resolved with parameter expansion rather than $(dirname ...) on purpose: this
+# hook is exercised with PATH set to a fixture bin holding only bash and python3,
+# where `dirname` does not exist. The command substitution then yields an empty
+# path, the source silently fails, and the refusal names the wrong missing tool.
 # shellcheck source=bin/fm-platform-lib.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-platform-lib.sh"
+. "${BASH_SOURCE[0]%/*}/fm-platform-lib.sh"
 
 case "${1:-}" in
   install|remove) ACTION=$1 ;;
