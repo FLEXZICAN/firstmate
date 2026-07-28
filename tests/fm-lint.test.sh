@@ -316,27 +316,85 @@ fixture_installed_scripts() { # <test-file> -> basenames it installs
   # the first. Matching is restricted to cp/ln -s in command position so that
   # merely INVOKING a real script (e.g. "$ROOT/bin/fm-bootstrap.sh install ...")
   # is not mistaken for installing one.
+  # Resolve one level of variable indirection first. Fixtures commonly hoist a
+  # path (RUNNER="$ROOT/bin/fm-test-run.sh") and later `cp "$RUNNER" ...`, which
+  # a literal-only scan misses entirely - that exact shape shipped a POSIX
+  # breakage past this check once already.
+  local joined
   # shellcheck disable=SC2016 # $ROOT is matched literally: it is text inside the test sources, not a value to expand.
-  sed -e :a -e '/\\$/N; s/\\\n//; ta' "$1" 2>/dev/null \
-    | grep -E '(^|[;&|(]|[[:space:]])(cp|ln -s) ' \
-    | grep -oE '\$ROOT/bin/[a-zA-Z0-9./_-]+\.sh' \
-    | sed 's|.*bin/||' \
+  joined=$(sed -e :a -e '/\\$/N; s/\\\n//; ta' "$1" 2>/dev/null \
+    | sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)="(\$ROOT\/bin\/[a-zA-Z0-9./_-]+\.sh)"[[:space:]]*$/\1=\2/')
+  # shellcheck disable=SC2016 # ditto: these are literal source strings.
+  printf '%s\n' "$joined" \
+    | awk '
+        # Remember VAR=$ROOT/bin/x.sh assignments normalized above.
+        /^[A-Za-z_][A-Za-z0-9_]*=\$ROOT\/bin\// {
+          split($0, kv, "=")
+          path = substr($0, index($0, "=") + 1)
+          sub(/.*bin\//, "", path)
+          var[kv[1]] = path
+          next
+        }
+        # An install line contributes every bin path it names, literal or via a
+        # remembered variable.
+        /(^|[;&|(]|[[:space:]])(cp|ln -s) / {
+          line = $0
+          while (match(line, /\$ROOT\/bin\/[a-zA-Z0-9._\/-]+\.sh/)) {
+            p = substr(line, RSTART, RLENGTH)
+            sub(/.*bin\//, "", p)
+            print p
+            line = substr(line, RSTART + RLENGTH)
+          }
+          line = $0
+          while (match(line, /\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/)) {
+            v = substr(line, RSTART, RLENGTH)
+            gsub(/[${}]/, "", v)
+            if (v in var) print var[v]
+            line = substr(line, RSTART + RLENGTH)
+          }
+        }
+      ' \
     | LC_ALL=C sort -u
 }
 
-script_direct_sources() { # <basename> -> basenames it sources
+# Everything the fixture makes available under its fake bin: the real scripts it
+# installs, PLUS stubs it writes there.
+#
+# Stubs are providers, not roots. fm-bootstrap.test.sh writes a stub named
+# fm-spawn.sh; treating that as "installed the real fm-spawn.sh" would demand
+# the real script's entire source closure from a fixture that deliberately
+# replaced it with three lines. So a stub satisfies someone else's dependency
+# and never contributes one of its own.
+fixture_provided_scripts() { # <test-file>
+  {
+    fixture_installed_scripts "$1"
+    sed -e :a -e '/\\$/N; s/\\\n//; ta' "$1" 2>/dev/null \
+      | grep -E '(cat|printf|echo|:)[^|]*>[[:space:]]*"[^"]*/bin/[a-zA-Z0-9._-]+\.sh"' \
+      | grep -oE '/bin/[a-zA-Z0-9._-]+\.sh' \
+      | sed 's|/bin/||'
+  } | LC_ALL=C sort -u
+}
+
+script_direct_sources() { # <basename> -> basenames it sources unconditionally
   local f="$ROOT/bin/$1"
   [ -f "$f" ] || return 0
-  grep -hoE '# shellcheck source=bin/[a-zA-Z0-9./_-]+\.sh' "$f" 2>/dev/null \
+  # Anchored at column 0 on purpose. A top-level source always executes, so a
+  # fixture missing it cannot run the script at all. An INDENTED directive sits
+  # inside a function or conditional - bin/fm-teardown.sh sources fm-wake-lib.sh
+  # only on a Herdr-presentation retire path, for instance - and demanding those
+  # would bloat every fixture with libraries its code path never reaches, then
+  # cascade into their sources too.
+  grep -hoE '^# shellcheck source=bin/[a-zA-Z0-9./_-]+\.sh' "$f" 2>/dev/null \
     | sed 's|# shellcheck source=bin/||' \
     | LC_ALL=C sort -u
 }
 
 test_fixtures_install_their_transitive_source_closure() {
-  local t installed need frontier next s dep missing offenders=""
+  local t installed provided need frontier next s dep missing offenders=""
   for t in "$ROOT"/tests/*.sh; do
     installed=$(fixture_installed_scripts "$t")
     [ -n "$installed" ] || continue
+    provided=$(fixture_provided_scripts "$t")
 
     need=""
     frontier=$installed
@@ -365,7 +423,7 @@ EOF
     missing=""
     for dep in $(printf '%s' "$need" | tr '|' '\n' | LC_ALL=C sort -u); do
       [ -n "$dep" ] || continue
-      printf '%s\n' "$installed" | grep -qxF "$dep" && continue
+      printf '%s\n' "$provided" | grep -qxF "$dep" && continue
       missing="$missing $dep"
     done
     [ -z "$missing" ] || offenders="${offenders}$(basename "$t"):$missing

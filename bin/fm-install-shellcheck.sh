@@ -26,7 +26,19 @@ case "$(uname -s 2>/dev/null || echo unknown)" in
 esac
 URL="https://github.com/koalaman/shellcheck/releases/download/v${VERSION}/${ARCHIVE}"
 DESTINATION=${1:?usage: fm-install-shellcheck.sh <destination-directory>}
-TMP=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/fm-shellcheck.XXXXXX")
+# RUNNER_TEMP is a NATIVE path on Windows runners (D:\a\_temp). Handing that to
+# MSYS mktemp does not fail loudly - it produces a path the later download and
+# checksum disagree about, which surfaces as a bogus "checksum mismatch" for an
+# archive that is in fact byte-correct. Convert before use.
+TMP_PARENT=${RUNNER_TEMP:-${TMPDIR:-/tmp}}
+case "$TMP_PARENT" in
+  [A-Za-z]:\\*|[A-Za-z]:/*)
+    if command -v cygpath >/dev/null 2>&1; then
+      TMP_PARENT=$(cygpath -u "$TMP_PARENT")
+    fi
+    ;;
+esac
+TMP=$(mktemp -d "$TMP_PARENT/fm-shellcheck.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
 DOWNLOAD_ATTEMPTS=3

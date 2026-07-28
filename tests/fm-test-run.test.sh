@@ -95,6 +95,9 @@ init_changed_fixture_repo() {
   local repo=$1 script
   mkdir -p "$repo/bin" "$repo/tests"
   cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+  # The runner sources the platform seam at startup, so a fixture repo that
+  # omits it cannot run the copied script at all.
+  cp "$ROOT/bin/fm-platform-lib.sh" "$repo/bin/fm-platform-lib.sh"
   chmod +x "$repo/bin/fm-test-run.sh"
   for script in \
     fm-brief.test.sh \
@@ -528,6 +531,8 @@ test_jobs_parallel_scheduler_and_failure_propagation() {
   d=tests/fm-supervision-instructions.test.sh
   mkdir -p "$repo/bin" "$repo/tests" "$evidence" "$fake_bin"
   cp "$RUNNER" "$runner"
+  # Same reason as init_changed_fixture_repo: the runner sources the seam.
+  cp "$ROOT/bin/fm-platform-lib.sh" "$repo/bin/fm-platform-lib.sh"
   cat >"$fake_bin/stat" <<'SH'
 #!/usr/bin/env bash
 if [ "$1" = "-c" ] && [ "$2" = "%a" ]; then

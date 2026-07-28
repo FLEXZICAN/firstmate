@@ -380,6 +380,13 @@ jobs:
           set -eu
           bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      # --json needs a real python3. Windows images ship "python" but python3 is
+      # not guaranteed on PATH, and Windows also ships a Microsoft Store alias at
+      # python3 that resolves and then refuses to run - so pin a real one rather
+      # than discover the difference in a failing lane.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
       - name: Report tool availability
         run: |
           set -eu
@@ -387,9 +394,11 @@ jobs:
           # herdr, and no stable herdr release ships a Windows asset yet - only
           # previews do. This step exists so a skip is visible in the log rather
           # than looking like coverage.
-          for t in jq node git shellcheck herdr treehouse; do
+          for t in jq node git shellcheck python3 herdr treehouse; do
             printf '%-12s %s\n' "$t" "$(command -v "$t" 2>/dev/null || echo MISSING)"
           done
+          # Resolving is not running, on this platform especially.
+          python3 -c 'print("python3 executes: ok")' || echo "python3 resolves but does not execute"
       - name: Behavior lane, parallel half
         run: |
           set -eu

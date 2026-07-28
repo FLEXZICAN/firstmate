@@ -124,10 +124,26 @@ now_iso() {
 #
 # GNU date's %3N is the next-best source (Linux and Git Bash have it; stock
 # macOS date does not, where it yields a literal "N" and is rejected here).
+# True only when python3 both resolves AND runs. Windows ships a Microsoft Store
+# app-execution alias at python3 that satisfies `command -v` and then prints an
+# install advertisement instead of executing, so presence is not proof. Probed
+# once and cached, because every caller here is on a hot path.
+FM_PYTHON3_OK=""
+python3_works() {
+  if [ -z "$FM_PYTHON3_OK" ]; then
+    if command -v python3 >/dev/null 2>&1 \
+      && [ "$(python3 -c 'print(1)' 2>/dev/null)" = 1 ]; then
+      FM_PYTHON3_OK=yes
+    else
+      FM_PYTHON3_OK=no
+    fi
+  fi
+  [ "$FM_PYTHON3_OK" = yes ]
+}
+
 fm_probe_now_ms_mode() {
   local probe
-  if command -v python3 >/dev/null 2>&1 \
-    && [ "$(python3 -c 'print(1)' 2>/dev/null)" = 1 ]; then
+  if python3_works; then
     printf 'python\n'
     return 0
   fi
@@ -587,7 +603,7 @@ aggregate_timing_json() {
   local out=$1
   shift
   [ "$#" -gt 0 ] || die "--aggregate-json requires at least one input timing JSON"
-  command -v python3 >/dev/null 2>&1 || die "--aggregate-json requires python3"
+  python3_works || die "--aggregate-json requires a working python3"
   python3 - "$out" "$@" <<'PY'
 import json, sys
 from pathlib import Path
@@ -958,8 +974,8 @@ write_json_artifact() {
   local records_file=${10}
   local families_file=${11}
 
-  if ! command -v python3 >/dev/null 2>&1; then
-    die "--json requires python3 to emit a valid timing artifact"
+  if ! python3_works; then
+    die "--json requires a working python3 to emit a valid timing artifact"
   fi
 
   python3 - "$out" "$started" "$finished" "$run_id" "$total" "$failed" "$skipped" "$duration" "$selection" "$records_file" "$families_file" <<'PY'
