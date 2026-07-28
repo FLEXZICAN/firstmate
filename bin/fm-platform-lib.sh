@@ -112,6 +112,58 @@ fm_platform_winpid() { # <msys-pid>
   esac
 }
 
+# Path to a usable PowerShell, or non-zero if there is none.
+#
+# `command -v powershell.exe` is not sufficient: Windows keeps it in
+# System32\WindowsPowerShell\v1.0, NOT in System32 itself, so a PATH carrying
+# only the usual Windows directories resolves nothing. That is not hypothetical -
+# it silently downgraded the git-lock staleness proof to "cannot tell" under a
+# minimal PATH, which fails safe but means an abandoned lock is never cleared.
+# pwsh (PowerShell 7+) is preferred when present, then the classic location.
+FM_PLATFORM_POWERSHELL=""
+fm_platform_powershell() {
+  local candidate
+  if [ -n "$FM_PLATFORM_POWERSHELL" ]; then
+    printf '%s\n' "$FM_PLATFORM_POWERSHELL"
+    return 0
+  fi
+  for candidate in pwsh.exe pwsh powershell.exe powershell; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      FM_PLATFORM_POWERSHELL=$candidate
+      printf '%s\n' "$FM_PLATFORM_POWERSHELL"
+      return 0
+    fi
+  done
+  candidate="${SYSTEMROOT:-/c/Windows}/System32/WindowsPowerShell/v1.0/powershell.exe"
+  case "$candidate" in
+    [A-Za-z]:\\*) candidate=$(fm_platform_userprofile_to_posix "$candidate") ;;
+  esac
+  if [ -x "$candidate" ]; then
+    FM_PLATFORM_POWERSHELL=$candidate
+    printf '%s\n' "$FM_PLATFORM_POWERSHELL"
+    return 0
+  fi
+  return 1
+}
+
+# Convert a Windows path to a POSIX one. cygpath when available, otherwise a
+# drive-letter rewrite good enough for the fixed system paths this file uses.
+fm_platform_userprofile_to_posix() {
+  local p=$1 drive rest
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -u "$p" 2>/dev/null && return 0
+  fi
+  case "$p" in
+    [A-Za-z]:\\*)
+      drive=$(printf '%s' "${p%%:*}" | tr '[:upper:]' '[:lower:]')
+      rest=${p#?:\\}
+      rest=${rest//\\//}
+      printf '/%s/%s\n' "$drive" "$rest"
+      ;;
+    *) printf '%s\n' "$p" ;;
+  esac
+}
+
 # The pid identifying THIS process in the space firstmate records for session
 # ownership. Windows pids are the only universal space here: a native harness
 # such as claude.exe has no MSYS pid at all, so MSYS pids cannot identify every
@@ -270,7 +322,7 @@ fm_platform_win_snapshot() {
 }
 
 fm_platform_win_snapshot_build() {
-  local raw
+  local raw ps_bin
   fm_platform_is_windows || return 1
 
   # wmic CSV columns are alphabetical: Node,Name,ParentProcessId,ProcessId.
@@ -279,9 +331,9 @@ fm_platform_win_snapshot_build() {
       | tr -d '\r' \
       | awk -F, 'NF >= 4 && $4 ~ /^[0-9]+$/ { print $4 "\t" $3 "\t" $2 }')
   fi
-  if [ -z "${raw:-}" ] && command -v powershell.exe >/dev/null 2>&1; then
+  if [ -z "${raw:-}" ] && ps_bin=$(fm_platform_powershell); then
     # shellcheck disable=SC2016 # $_ and `t are PowerShell syntax; bash must not expand them.
-    raw=$(powershell.exe -NoProfile -NonInteractive -Command \
+    raw=$("$ps_bin" -NoProfile -NonInteractive -Command \
       'Get-CimInstance Win32_Process | ForEach-Object { "{0}`t{1}`t{2}" -f $_.ProcessId, $_.ParentProcessId, $_.Name }' \
       2>/dev/null | tr -d '\r')
   fi
@@ -358,10 +410,10 @@ fm_platform_win_name() { # <winpid>
 # by a bare interpreter (node, python), so it stays a targeted per-pid query
 # rather than bloating the bulk snapshot.
 fm_platform_win_command() { # <winpid>
-  local pid=$1 out
+  local pid=$1 out ps_bin
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  command -v powershell.exe >/dev/null 2>&1 || return 1
-  out=$(powershell.exe -NoProfile -NonInteractive -Command \
+  ps_bin=$(fm_platform_powershell) || return 1
+  out=$("$ps_bin" -NoProfile -NonInteractive -Command \
     "(Get-CimInstance Win32_Process -Filter 'ProcessId=$pid').CommandLine" 2>/dev/null | tr -d '\r')
   [ -n "$out" ] || return 1
   printf '%s\n' "$out"
@@ -381,10 +433,10 @@ fm_platform_win_command() { # <winpid>
 # Only IOException means "held". Anything else (missing file, permission denied,
 # an unusable interpreter) is reported as cannot-tell rather than guessed at.
 fm_platform_win_file_holder() { # <file>
-  local file=$1 winpath out
+  local file=$1 winpath out ps_bin
   case "$file" in '') return 2 ;; esac
   fm_platform_is_windows || return 2
-  command -v powershell.exe >/dev/null 2>&1 || return 2
+  ps_bin=$(fm_platform_powershell) || return 2
   if command -v cygpath >/dev/null 2>&1; then
     winpath=$(cygpath -w -- "$file" 2>/dev/null) || return 2
   else
@@ -394,7 +446,7 @@ fm_platform_win_file_holder() { # <file>
   # The path is handed over through the environment rather than interpolated
   # into the command text, so a path containing quotes cannot break out of it.
   # shellcheck disable=SC2016 # $env: and $p are PowerShell syntax; bash must not expand them.
-  out=$(FM_PROBE_PATH="$winpath" powershell.exe -NoProfile -NonInteractive -Command '
+  out=$(FM_PROBE_PATH="$winpath" "$ps_bin" -NoProfile -NonInteractive -Command '
     $p = $env:FM_PROBE_PATH
     if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { Write-Output "GONE"; exit }
     try {

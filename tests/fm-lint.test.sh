@@ -75,10 +75,15 @@ test_ci_installs_and_logs_the_pinned_version() {
   # CI must derive the version from the one owner (never hardcode a divergent
   # number) and log the resolved version as parity evidence.
   assert_grep "VERSION=\"\$(\"\$ROOT/bin/fm-lint.sh\" --required-version)\"" "$INSTALLER" "installer must read the version fm-lint.sh pins"
-  [ "$(grep -Fc "bin/fm-install-shellcheck.sh \"\$RUNNER_TEMP/bin\"" "$CI")" -eq 4 ] || fail "lint and all three portable behavior jobs must use the shared ShellCheck installer"
+  # lint, the three portable behavior jobs, and the windows-gitbash lane. The
+  # count is exact on purpose: a job that installs ShellCheck some other way
+  # would silently lint under an unpinned version.
+  [ "$(grep -Fc "bin/fm-install-shellcheck.sh \"\$RUNNER_TEMP/bin\"" "$CI")" -eq 5 ] || fail "lint, the three portable behavior jobs, and windows-gitbash must use the shared ShellCheck installer"
   assert_grep "ACTUAL_SHA256=\$(sha256sum" "$INSTALLER" "installer must calculate the ShellCheck archive checksum"
   assert_grep "[ \"\$ACTUAL_SHA256\" = \"\$SHA256\" ]" "$INSTALLER" "installer must verify the ShellCheck archive checksum"
-  assert_grep "\"\$DESTINATION/shellcheck\" --version" "$INSTALLER" "installer must log the resolved ShellCheck version as evidence"
+  # Parameterized by $BINARY because the Windows asset is shellcheck.exe. Bash
+  # on Git Bash resolves a bare `shellcheck` to it, so fm-lint.sh is unaffected.
+  assert_grep "\"\$DESTINATION/\$BINARY\" --version" "$INSTALLER" "installer must log the resolved ShellCheck version as evidence"
   pass "CI installs and logs the pinned ShellCheck version from the one owner"
 }
 
@@ -104,9 +109,42 @@ while [ "$#" -gt 0 ]; do
 done
 exit 2
 SH
+  # The installer selects asset, checksum, and extractor per platform, so the
+  # fixture has to answer for the branch THIS host takes. Both checksums are
+  # restated here deliberately and must track bin/fm-install-shellcheck.sh; the
+  # static assertions above already guard that the verification logic exists,
+  # this only keeps the retry path reachable.
+  local sc_sha sc_binary
+  case "$(uname -s 2>/dev/null || echo unknown)" in
+    MINGW*|MSYS*|CYGWIN*)
+      sc_sha=8a4e35ab0b331c85d73567b12f2a444df187f483e5079ceffa6bda1faa2e740e
+      sc_binary=shellcheck.exe
+      ;;
+    *)
+      sc_sha=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+      sc_binary=shellcheck
+      ;;
+  esac
   cat > "$fakebin/sha256sum" <<'SH'
 #!/usr/bin/env bash
-printf '8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  %s\n' "$1"
+printf '%s  %s\n' "$FM_TEST_SC_SHA" "$1"
+SH
+  # The Windows zip puts the binary at the archive root; stub it the same way.
+  cat > "$fakebin/unzip" <<'SH'
+#!/usr/bin/env bash
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-d" ]; then
+    mkdir -p "$2"
+    cat > "$2/shellcheck.exe" <<'EOF'
+#!/usr/bin/env bash
+printf 'ShellCheck - shell script analysis tool\nversion: 0.11.0\n'
+EOF
+    chmod +x "$2/shellcheck.exe"
+    exit 0
+  fi
+  shift
+done
+exit 2
 SH
   cat > "$fakebin/tar" <<'SH'
 #!/usr/bin/env bash
@@ -128,13 +166,13 @@ SH
 #!/usr/bin/env bash
 exit 0
 SH
-  chmod +x "$fakebin/curl" "$fakebin/sha256sum" "$fakebin/tar" "$fakebin/sleep"
+  chmod +x "$fakebin/curl" "$fakebin/sha256sum" "$fakebin/tar" "$fakebin/unzip" "$fakebin/sleep"
 
-  out=$(CURL_COUNT="$tmp/curl-count" PATH="$fakebin:$PATH" "$INSTALLER" "$destination" 2>&1) \
+  out=$(CURL_COUNT="$tmp/curl-count" FM_TEST_SC_SHA="$sc_sha" PATH="$fakebin:$PATH" "$INSTALLER" "$destination" 2>&1) \
     || fail "installer did not recover from a transient download failure"$'\n'"$out"
   [ "$(cat "$tmp/curl-count")" -eq 2 ] || fail "installer did not retry exactly once after recovery"
   assert_contains "$out" "download attempt 1 failed; retrying" "installer did not disclose its retry"
-  [ -x "$destination/shellcheck" ] || fail "installer did not install ShellCheck after retrying"
+  [ -x "$destination/$sc_binary" ] || fail "installer did not install ShellCheck after retrying"
   pass "ShellCheck installer retries a transient download failure"
 }
 

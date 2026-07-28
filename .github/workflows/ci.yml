@@ -340,6 +340,76 @@ jobs:
             exit 1
           }
 
+  windows-gitbash:
+    name: Behavior windows-gitbash (native Git Bash)
+    runs-on: windows-latest
+    # Measured on a developer machine: ~146s parallel half plus ~396s serial
+    # half. The cap is a hang tripwire with margin, not the expected wall.
+    timeout-minutes: 30
+    defaults:
+      run:
+        # GitHub's "bash" on windows-latest IS Git Bash (MSYS2), which is exactly
+        # the substrate this lane exists to cover. Do NOT switch this to pwsh.
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Assert the substrate is native Git Bash, not WSL or Cygwin-on-CI
+        run: |
+          set -eu
+          # A silent substrate change would make this lane pass while testing
+          # something else entirely, so fail loudly rather than adapt.
+          case "$(uname -s)" in
+            MINGW*|MSYS*) ;;
+            *) echo "::error::expected MINGW/MSYS, got $(uname -s)"; exit 1 ;;
+          esac
+          uname -a
+      - name: Assert LF checkout
+        run: |
+          set -eu
+          # .gitattributes pins eol=lf. Without it, core.autocrlf on Windows
+          # rewrites every .sh to CRLF, which breaks heredoc terminators and
+          # env shebangs in ways that surface as unrelated failures.
+          if grep -qU $'\r' bin/fm-test-run.sh; then
+            echo "::error::working tree has CRLF line endings; .gitattributes is not taking effect"
+            exit 1
+          fi
+      - name: Install pinned ShellCheck
+        run: |
+          set -eu
+          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Report tool availability
+        run: |
+          set -eu
+          # Recorded rather than asserted: the lane gate-skips cleanly without
+          # herdr, and no stable herdr release ships a Windows asset yet - only
+          # previews do. This step exists so a skip is visible in the log rather
+          # than looking like coverage.
+          for t in jq node git shellcheck herdr treehouse; do
+            printf '%-12s %s\n' "$t" "$(command -v "$t" 2>/dev/null || echo MISSING)"
+          done
+      - name: Behavior lane, parallel half
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/fm-test"
+          bin/fm-test-run.sh --lane windows-gitbash-parallel --jobs 6 \
+            --json "$RUNNER_TEMP/fm-test/fm-test-timing-windows-parallel.json"
+      - name: Behavior lane, serial half
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/fm-test"
+          bin/fm-test-run.sh --lane windows-gitbash-serial \
+            --json "$RUNNER_TEMP/fm-test/fm-test-timing-windows-serial.json"
+      - name: Upload windows timing artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fm-test-timing-windows-gitbash
+          path: ${{ runner.temp }}/fm-test/fm-test-timing-windows-*.json
+          if-no-files-found: warn
+
   invariants:
     name: Repo invariants
     runs-on: ubuntu-latest
