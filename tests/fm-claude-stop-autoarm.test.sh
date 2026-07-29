@@ -497,7 +497,7 @@ test_chain_match_rule_shared_by_both_walks() {
   [ "$got" = 200 ] || fail "a non-claude harness must resolve to the innermost match, got '$got'"
 
   # Full paths and .exe suffixes both normalize; Windows chains carry both forms.
-  got=$(chain_pick "100	/usr/bin/bash" "200	/c/Users/x/.local/bin/claude" "300	/usr/bin/pwsh")
+  got=$(chain_pick "100	/usr/bin/bash" "200	/c/opt/local/bin/claude" "300	/usr/bin/pwsh")
   [ "$got" = 200 ] || fail "a full path must normalize to its basename, got '$got'"
 
   got=$(chain_pick "100	bash.exe" "200	pwsh.exe" "300	herdr.exe")

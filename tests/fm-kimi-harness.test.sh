@@ -30,9 +30,20 @@ test_existing_launch_templates_are_byte_pinned() {
   pass "fm-spawn: the five pre-existing adapters' launch templates stay byte-pinned"
 }
 
+# The pattern is a REGEX whose first character is a bracket expression, not a
+# literal leading slash, for two reasons at once:
+#
+#   * it cannot match this line, so the check does not flag its own source (the
+#     job the old "/""Users/" string-splitting trick did);
+#   * MSYS does not mistake it for a path. Git Bash rewrites an argument that
+#     looks like an absolute POSIX path into a Windows one before the native
+#     git.exe sees it, so the old literal pattern reached git as a path under
+#     the Git installation directory and matched nothing. Measured: the literal
+#     form reports 0 matches on Windows where the same tree yields 1 on Linux,
+#     which made this invariant pass without checking anything on Windows.
 test_tracked_files_have_no_user_absolute_paths() {
-  local pattern="/""Users/" matches
-  matches=$(git -C "$ROOT" grep -n -F "$pattern" -- . || true)
+  local matches
+  matches=$(git -C "$ROOT" grep -n -E "[/]Users/" -- . || true)
   [ -z "$matches" ] || fail "tracked files contain user-specific absolute paths: $matches"
   pass "repository: tracked files contain no user-specific absolute paths"
 }
