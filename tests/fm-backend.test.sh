@@ -811,7 +811,9 @@ esac
 exit 0
 SH
   chmod +x "$fb/tmux"
-  fm_fake_exit0 "$fb" treehouse
+  # treehouse must report a worktree path, not just exit 0: the Windows spawn
+  # path acquires by lease and reads it from stdout (tests/lib.sh "spawn fixtures").
+  fm_fake_treehouse "$fb"
   printf '%s\n' "$fb"
 }
 
@@ -881,7 +883,9 @@ esac
 exit 0
 SH
   chmod +x "$fb/tmux"
-  fm_fake_exit0 "$fb" treehouse
+  # treehouse must report a worktree path, not just exit 0: the Windows spawn
+  # path acquires by lease and reads it from stdout (tests/lib.sh "spawn fixtures").
+  fm_fake_treehouse "$fb"
   printf '%s\n' "$fb"
 }
 

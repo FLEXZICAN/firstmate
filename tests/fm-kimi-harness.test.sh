@@ -152,7 +152,10 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" treehouse gh-axi gh
+  fm_fake_exit0 "$fakebin" gh-axi gh
+  # treehouse must report a worktree path, not just exit 0: the Windows spawn
+  # path acquires by lease and reads it from stdout (tests/lib.sh "spawn fixtures").
+  fm_fake_treehouse "$fakebin"
   fm_fake_exit0 "$fakebin" kimi
   ln -s "$JQ_BIN" "$fakebin/jq"
   printf '%s\n' "$fakebin"

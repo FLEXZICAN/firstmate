@@ -272,15 +272,6 @@ SH
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-platform-lib.sh"
 
-fm_test_wait_scale() {
-  if [ -n "${FM_TEST_WAIT_SCALE:-}" ]; then
-    printf '%s\n' "$FM_TEST_WAIT_SCALE"
-  elif fm_platform_is_windows; then
-    printf '6\n'
-  else
-    printf '1\n'
-  fi
-}
 
 wait_for_exit() {
   local pid=$1 limit=${2:-50} i=0

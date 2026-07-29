@@ -1651,7 +1651,15 @@ fi
 # worktree, because nothing typed `treehouse get` at it. Settle both before the
 # first POSIX line below. Orca is excluded for the same reason it skips
 # treehouse - it owns its own terminal - and cannot occur here anyway.
-if fm_platform_is_windows && [ "$BACKEND" != orca ]; then
+#
+# FM_SPAWN_NO_PANE_SETUP is a TEST-ONLY bypass, in the same spirit as
+# FM_SPAWN_NO_GUARD above. Both steps below work by typing into a pane and
+# reading the answer back, and a fixture's fake backend has no pane: it discards
+# what is sent and has nothing to capture. The property being protected - never
+# launch an agent into an unknown directory - is vacuous there too, because no
+# agent is launched. Fixtures that DO model a pane leave this unset and exercise
+# the real probes (tests/lib.sh "spawn fixtures").
+if fm_platform_is_windows && [ "$BACKEND" != orca ] && [ -z "${FM_SPAWN_NO_PANE_SETUP:-}" ]; then
   spawn_windows_enter_posix_shell || exit 1
   spawn_windows_enter_dir "$WT" || exit 1
 fi
