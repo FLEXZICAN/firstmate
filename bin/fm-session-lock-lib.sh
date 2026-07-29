@@ -22,8 +22,45 @@ FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$|^pi-signed$'
 # Pids printed here are WINDOWS pids, which is the correct identity to persist:
 # the MSYS pid belongs to a transient tool shell, while the Windows pid is the
 # harness process that outlives the whole session.
+
+# Match rule for one already-built ancestry chain, innermost hop first. Input
+# lines are "<pid>\t<match-text>"; the chosen pid is printed.
+#
+# This is the POSIX walk's rule, kept deliberately identical so the two
+# platforms cannot disagree about which pid owns a lock. First match wins,
+# EXCEPT that a claude-named match keeps extending through a CONTIGUOUS run of
+# claude-named ancestors and returns the outermost of that run: Claude Code's
+# Stop hook fires as a bg-spare worker several levels below the session that
+# actually holds the lock (hook shell -> claude bg-spare -> claude bg-pty-host
+# -> claude -> claude), so first-match-wins resolves to the worker and the
+# auto-arm then treats its own session as an unrelated live owner and never
+# arms. The run is bounded by the first non-match rather than by the top of the
+# ancestry, so an unrelated claude further up the real process tree is never
+# absorbed into this session's chain.
+fm_harness_pick_from_chain() {  # <chain>
+  local chain=$1 pid text base best='' extending=0
+  while IFS=$'\t' read -r pid text; do
+    [ -n "$pid" ] || continue
+    base=${text##*/}
+    base=${base%% *}
+    base=${base%.[Ee][Xx][Ee]}
+    if printf '%s' "$base" | grep -qE "$FM_HARNESS_RE"; then
+      best=$pid
+      case "$base" in
+        *claude*) extending=1; continue ;;
+      esac
+      break
+    fi
+    [ "$extending" -eq 1 ] && break
+  done <<EOF
+$chain
+EOF
+  [ -n "$best" ] || return 1
+  printf '%s\n' "$best"
+}
+
 fm_harness_ancestry_pid_windows() {
-  local pid name base
+  local pid name base pick
   # Build both snapshots ONCE in this shell. Called directly, never in a command
   # substitution, or every hop would respawn ps and wmic.
   fm_platform_msys_snapshot_ensure || return 1
@@ -35,22 +72,21 @@ fm_harness_ancestry_pid_windows() {
   # here - the Win32 table shows bash.exe for all of them - so this must run
   # before the bridge or those harnesses are skipped entirely. The WINPID is what
   # gets returned, so stored identity stays in one pid space either way.
-  local msys_chain mwin mcmd mbase
+  local msys_chain mwin mcmd msys_norm=""
   msys_chain=$(fm_platform_msys_chain $$ 16) || msys_chain=""
   if [ -n "$msys_chain" ]; then
-    # The MSYS pid is discarded: what gets recorded is always the WINPID.
+    # The MSYS pid is discarded: what gets recorded is always the WINPID, so the
+    # chain is normalized to "<winpid>\t<command>" before the shared match rule.
     while IFS=$'\t' read -r _ mwin mcmd; do
       [ -n "$mwin" ] || continue
-      mbase=${mcmd##*/}
-      mbase=${mbase%% *}
-      mbase=${mbase%.[Ee][Xx][Ee]}
-      if printf '%s' "$mbase" | grep -qE "$FM_HARNESS_RE"; then
-        printf '%s\n' "$mwin"
-        return 0
-      fi
+      msys_norm="$msys_norm$mwin"$'\t'"$mcmd"$'\n'
     done <<EOF
 $msys_chain
 EOF
+    if pick=$(fm_harness_pick_from_chain "$msys_norm"); then
+      printf '%s\n' "$pick"
+      return 0
+    fi
   fi
 
   # Stage 2: bridge to the Win32 table for a native harness such as claude.exe.
@@ -58,20 +94,23 @@ EOF
 
   # One awk pass for the whole chain, then loop in-process. Deliberately avoids
   # a command substitution per hop, which dominates cost on Windows.
+  # 16 hops, matching the POSIX walk: the bg-spare chain is deeper than the
+  # original 8 and a native claude.exe nests the same way here.
   local chain deferred=""
-  chain=$(fm_platform_win_ancestry_chain "$pid" 8) || return 1
+  chain=$(fm_platform_win_ancestry_chain "$pid" 16) || return 1
   [ -n "$chain" ] || return 1
 
+  if pick=$(fm_harness_pick_from_chain "$chain"); then
+    printf '%s\n' "$pick"
+    return 0
+  fi
+
+  # No direct name match anywhere in the chain. Only now pay for the bare
+  # interpreter case (node/python hosting a harness), which needs a per-pid
+  # command-line query.
   while IFS=$'\t' read -r pid name; do
     [ -n "$pid" ] || continue
     base=${name%.[Ee][Xx][Ee]}
-    if printf '%s' "$base" | grep -qE "$FM_HARNESS_RE"; then
-      printf '%s\n' "$pid"
-      return 0
-    fi
-    # Bare interpreter hosting a harness. Checking this needs a per-pid command
-    # line query, so defer it: only pay for it if no direct name match is found
-    # anywhere in the chain.
     case "$base" in
       *node*|*python*) deferred="$deferred $pid" ;;
     esac

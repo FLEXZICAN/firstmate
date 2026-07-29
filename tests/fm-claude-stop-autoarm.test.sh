@@ -470,6 +470,43 @@ test_fm_lock_status_still_works_with_shared_lib() {
   pass "fm-lock: shared session-lock lib preserves the status path"
 }
 
+# The bg-spare rule as a pure function over a synthetic chain, so every host
+# proves it for both walks. test_resolves_outermost_claude_pid_in_nested_bgspare_chain
+# above covers it end to end through real processes, but only exercises the POSIX
+# walk: Windows resolves ancestry from process-table snapshots that a test cannot
+# stage as live processes. The two walks must not be allowed to disagree about
+# which pid owns a lock, so the shared rule is pinned directly.
+test_chain_match_rule_shared_by_both_walks() {
+  # shellcheck source=/dev/null
+  . "$ROOT/bin/fm-session-lock-lib.sh"
+  local got
+  chain_pick() { fm_harness_pick_from_chain "$(printf '%s\n' "$@")" || printf 'NONE\n'; }
+
+  # hook shell -> claude -> claude -> claude(lock): the outermost holds the lock.
+  got=$(chain_pick "100	bash.exe" "200	claude.exe" "300	claude.exe" "400	claude.exe" "500	pwsh.exe")
+  [ "$got" = 400 ] || fail "nested claude run must resolve to the outermost pid, got '$got'"
+
+  # A gap bounds the run: an unrelated claude further up the real process tree
+  # (e.g. the live session that launched a test) is not part of this chain.
+  got=$(chain_pick "100	bash.exe" "200	claude.exe" "300	pwsh.exe" "400	claude.exe")
+  [ "$got" = 200 ] || fail "a non-match must end the claude run, got '$got'"
+
+  # Every other harness keeps first-match-wins: Pi's inner engine holds the lock,
+  # not the signed wrapper above it.
+  got=$(chain_pick "100	bash.exe" "200	pi" "300	pi-signed" "400	pwsh.exe")
+  [ "$got" = 200 ] || fail "a non-claude harness must resolve to the innermost match, got '$got'"
+
+  # Full paths and .exe suffixes both normalize; Windows chains carry both forms.
+  got=$(chain_pick "100	/usr/bin/bash" "200	/c/Users/x/.local/bin/claude" "300	/usr/bin/pwsh")
+  [ "$got" = 200 ] || fail "a full path must normalize to its basename, got '$got'"
+
+  got=$(chain_pick "100	bash.exe" "200	pwsh.exe" "300	herdr.exe")
+  [ "$got" = NONE ] || fail "a chain with no harness must resolve to nothing, got '$got'"
+
+  pass "the ancestry match rule resolves the same pid for the POSIX and Windows walks"
+}
+
+test_chain_match_rule_shared_by_both_walks
 test_settings_registers_autoarm_with_multi_hour_timeout
 test_inert_in_child_worktree
 test_inert_without_session_lock
