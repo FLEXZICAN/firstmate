@@ -26,7 +26,10 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" treehouse gh-axi gh
+  fm_fake_exit0 "$fakebin" gh-axi gh
+  # treehouse must report a worktree path, not just exit 0: the Windows spawn
+  # path acquires by lease and reads it from stdout (tests/lib.sh, docs/windows-gitbash.md).
+  fm_fake_treehouse "$fakebin"
   printf '%s\n' "$fakebin"
 }
 
@@ -122,7 +125,9 @@ test_fm_lock_recognizes_grok_holder() {
   home="$TMP_ROOT/lock-home"
   fakebin=$(fm_fakebin "$TMP_ROOT/lock-fake")
   mkdir -p "$home/state"
-  printf '%s\n' "$$" > "$home/state/.lock"
+  # The RECORDED owner is written in firstmate's pid space, not the shell's
+  # (tests/lib.sh "recorded session-owner identity").
+  fm_owner_pid_of "$$" > "$home/state/.lock"
   cat > "$fakebin/ps" <<'SH'
 #!/usr/bin/env bash
 case "$*" in

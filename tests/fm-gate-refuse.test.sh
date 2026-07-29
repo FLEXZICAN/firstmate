@@ -30,6 +30,10 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# This suite MODELS a pane (tests/lib.sh "spawn fixtures"), so it opts back in to
+# the Windows pane setup and exercises the real probes rather than skipping them.
+unset FM_SPAWN_NO_PANE_SETUP
+
 GATE_LIB="$ROOT/bin/fm-gate-refuse-lib.sh"
 SPAWN="$ROOT/bin/fm-spawn.sh"
 SEND="$ROOT/bin/fm-send.sh"
