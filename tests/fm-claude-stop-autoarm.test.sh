@@ -20,6 +20,7 @@ fm_git_identity fmtest fmtest@example.invalid
 FAKEBIN=$(fm_fakebin "$TMP_ROOT/fakebin")
 ln -s /bin/bash "$FAKEBIN/claude"
 FAKE_CLAUDE="$FAKEBIN/claude"
+export FAKE_CLAUDE
 
 # Session ownership is recorded in the platform's pid space, which on Windows is
 # the Windows pid rather than the MSYS one (a native harness has no MSYS pid at
@@ -305,6 +306,37 @@ test_stale_lock_recovery_preserves_afk_and_need_gates() {
   pass "auto-arm: stale-owner recovery leaves the AFK and supervision-need gates unchanged"
 }
 
+test_resolves_outermost_claude_pid_in_nested_bgspare_chain() {
+  local dir out status inner_pid lock_pid
+  dir=$(make_primary_dir "$TMP_ROOT/nested-chain")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+  # A genuine multi-level contiguous claude-named ancestry: the hook fires
+  # inside an inner fake-claude process (its recorded pid is distinct from its
+  # own parent, a second, outer fake-claude process holding the session lock -
+  # the bg-spare shape). Only the outer pid may own the lock; a
+  # first-match-wins walk would resolve to the inner pid instead and leave the
+  # hook inert. The inner process records its own pid before running the hook
+  # so bash cannot tail-exec-collapse it into the outer pid, which would
+  # collapse the two-hop chain this test depends on down to one hop.
+  out=$(printf '%s\n' '{"session_id":"nested"}' \
+    | FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+        printf "%s\n" "$$" > "$FM_HOME/state/.lock"
+        "$FAKE_CLAUDE" -c "
+          printf \"%s\n\" \"\$\$\" > \"\$FM_HOME/state/inner-pid\"
+          \"\$FM_HOME/bin/fm-claude-stop-autoarm.sh\"
+        "
+      ' 2>&1); status=$?
+  inner_pid=$(cat "$dir/state/inner-pid" 2>/dev/null || true)
+  lock_pid=$(cat "$dir/state/.lock" 2>/dev/null || true)
+  [ -n "$inner_pid" ] && [ "$inner_pid" != "$lock_pid" ] \
+    || fail "test setup did not produce a genuine two-hop claude chain: inner=$inner_pid lock=$lock_pid"
+  expect_code 2 "$status" "a nested contiguous claude ancestry must resolve to the outer lock-owning pid and arm"
+  [ -e "$dir/state/arm-ran" ] || fail "hook did not resolve past the inner claude-named process to the outer lock owner"
+  [ "$(epoch_outcome "$dir")" = rewake ] || fail "nested-chain arm must record outcome=rewake"
+  pass "auto-arm: resolves the outermost pid of a nested contiguous claude ancestry (bg-spare chain)"
+}
+
 test_inert_when_fleet_idle() {
   local dir out status
   dir=$(make_primary_dir "$TMP_ROOT/idle")
@@ -438,6 +470,43 @@ test_fm_lock_status_still_works_with_shared_lib() {
   pass "fm-lock: shared session-lock lib preserves the status path"
 }
 
+# The bg-spare rule as a pure function over a synthetic chain, so every host
+# proves it for both walks. test_resolves_outermost_claude_pid_in_nested_bgspare_chain
+# above covers it end to end through real processes, but only exercises the POSIX
+# walk: Windows resolves ancestry from process-table snapshots that a test cannot
+# stage as live processes. The two walks must not be allowed to disagree about
+# which pid owns a lock, so the shared rule is pinned directly.
+test_chain_match_rule_shared_by_both_walks() {
+  # shellcheck source=/dev/null
+  . "$ROOT/bin/fm-session-lock-lib.sh"
+  local got
+  chain_pick() { fm_harness_pick_from_chain "$(printf '%s\n' "$@")" || printf 'NONE\n'; }
+
+  # hook shell -> claude -> claude -> claude(lock): the outermost holds the lock.
+  got=$(chain_pick "100	bash.exe" "200	claude.exe" "300	claude.exe" "400	claude.exe" "500	pwsh.exe")
+  [ "$got" = 400 ] || fail "nested claude run must resolve to the outermost pid, got '$got'"
+
+  # A gap bounds the run: an unrelated claude further up the real process tree
+  # (e.g. the live session that launched a test) is not part of this chain.
+  got=$(chain_pick "100	bash.exe" "200	claude.exe" "300	pwsh.exe" "400	claude.exe")
+  [ "$got" = 200 ] || fail "a non-match must end the claude run, got '$got'"
+
+  # Every other harness keeps first-match-wins: Pi's inner engine holds the lock,
+  # not the signed wrapper above it.
+  got=$(chain_pick "100	bash.exe" "200	pi" "300	pi-signed" "400	pwsh.exe")
+  [ "$got" = 200 ] || fail "a non-claude harness must resolve to the innermost match, got '$got'"
+
+  # Full paths and .exe suffixes both normalize; Windows chains carry both forms.
+  got=$(chain_pick "100	/usr/bin/bash" "200	/c/opt/local/bin/claude" "300	/usr/bin/pwsh")
+  [ "$got" = 200 ] || fail "a full path must normalize to its basename, got '$got'"
+
+  got=$(chain_pick "100	bash.exe" "200	pwsh.exe" "300	herdr.exe")
+  [ "$got" = NONE ] || fail "a chain with no harness must resolve to nothing, got '$got'"
+
+  pass "the ancestry match rule resolves the same pid for the POSIX and Windows walks"
+}
+
+test_chain_match_rule_shared_by_both_walks
 test_settings_registers_autoarm_with_multi_hour_timeout
 test_inert_in_child_worktree
 test_inert_without_session_lock
@@ -445,6 +514,7 @@ test_reclaims_stale_session_lock_before_arming
 test_inert_when_lock_held_by_other_harness
 test_inert_when_afk
 test_stale_lock_recovery_preserves_afk_and_need_gates
+test_resolves_outermost_claude_pid_in_nested_bgspare_chain
 test_inert_when_fleet_idle
 test_actionable_close_rewakes_with_reason
 test_failed_close_rewakes_with_failure_banner
