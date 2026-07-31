@@ -84,12 +84,34 @@ That check is load-bearing rather than defensive: a PowerShell profile ending in
 - `GOTMPDIR` is exported as an MSYS path (`/tmp/fm-<id>/gotmp`).
   A native Go toolchain does not read that as a Windows path, so Go projects have not been exercised here.
 
+## Test coverage and the ledger
+
+The `windows-gitbash` lane is an allow-list, so on its own it can never fail because a script is missing from it.
+That is a real hazard rather than a theoretical one: an upstream sync added two test scripts that landed outside the lane and nothing reported it, and "never measured" then looks exactly like "covered".
+
+So every `tests/*.test.sh` must be in **exactly one** of two places, and `run_coverage_guard` fails if any test is in neither, in both, or carries a ledger entry with no reason:
+
+- `list_windows_gitbash` - measured green here, twice, and not flaky.
+- `list_windows_excluded` - not in the lane, with a stated reason.
+
+A permanent reason is fine and stays; there is no tmux on Windows and there never will be.
+What is not fine is an entry whose reason is "not measured yet".
+The reasons are the burn-down list, and the ledger is expected to shrink.
+
+The full suite was measured here once to populate it.
+Three tests that looked green under load were rejected on clean re-runs - one fails consistently, one is flaky, and one intermittently hangs for hours where it normally takes two minutes.
+That is why the lane's membership rule requires a re-measure rather than a single pass, and treats flakiness as disqualifying.
+
+Two tests hang intermittently on Windows (`fm-watch-triage`, `fm-send-popup-settle`).
+Both run in minutes normally and then occasionally never return, which is enough to make an unattended full-suite run impractical regardless of what else is fixed.
+
 ## Regression entry points
 
 ```sh
 tests/fm-platform-lib.test.sh
 bin/fm-test-run.sh --lane windows-gitbash-parallel --jobs 6
 bin/fm-test-run.sh --lane windows-gitbash-serial
+bin/fm-test-run.sh --check-coverage      # includes the Windows ledger
 ```
 
 CI runs the same two halves as the `windows-gitbash` job on `windows-latest`, which also asserts the substrate is MINGW/MSYS and the checkout is LF.

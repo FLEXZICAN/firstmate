@@ -301,8 +301,10 @@ EOF
 # survive the context that exposed it.
 list_windows_gitbash() {
   cat <<'EOF'
+tests/fm-afk-return.test.sh
 tests/fm-ask-user-authority.test.sh
 tests/fm-backend-herdr-respawn-idem-e2e.test.sh
+tests/fm-backlog-handoff.test.sh
 tests/fm-brief.test.sh
 tests/fm-calm-pi-extension.test.sh
 tests/fm-captain-translation-contract.test.sh
@@ -318,15 +320,113 @@ tests/fm-nm-test-contract.test.sh
 tests/fm-no-mistakes-ownership.test.sh
 tests/fm-platform-lib.test.sh
 tests/fm-review-diff.test.sh
+tests/fm-send-secondmate-marker.test.sh
 tests/fm-send-settle.test.sh
+tests/fm-send-strict.test.sh
+tests/fm-spawn-batch.test.sh
 tests/fm-stow-contract.test.sh
 tests/fm-supervision-events.test.sh
 tests/fm-supervision-instructions.test.sh
 tests/fm-tangle-guard.test.sh
+tests/fm-tmux-submit-busy.test.sh
 tests/fm-transition-lib.test.sh
 tests/fm-update.test.sh
 tests/fm-wake-daemon-lifecycle-e2e.test.sh
 tests/no-mistakes-required-workflow.test.sh
+EOF
+}
+
+# Windows ledger: every tests/*.test.sh that is NOT in list_windows_gitbash,
+# with the reason it is not, as "<path><TAB><reason>".
+#
+# The lane above is an allow-list and is deliberately outside the partition
+# proof, so nothing there can fail because a script is missing from it. This
+# list is what makes the gap countable: run_coverage_guard requires every test
+# to be in exactly one of the two, so a new test cannot land silently uncovered.
+# An upstream sync added two test scripts that landed outside the lane and
+# nothing reported it - "never measured" then looks exactly like "covered".
+#
+# A permanent reason is fine and stays: there is no tmux on Windows and there
+# never will be. What is not fine is an entry with no reason, or a reason that
+# says only "not measured". The reasons ARE the burn-down list; the ledger is
+# expected to shrink.
+#
+# Every reason below was measured, not assumed. Where a cause was checked rather
+# than guessed it says so - bootstrap really does find git outside the fixture,
+# so those entries name the fixture PATH rather than blaming the product.
+list_windows_excluded() {
+  cat <<'EOF'
+tests/fm-afk-inject-e2e.test.sh	gate-skips here: tmux not found
+tests/fm-afk-inject-herdr-e2e.test.sh	fails on Windows:  Scenario A: human text not in log after submit
+tests/fm-afk-launch.test.sh	fails on Windows:  launcher signal: interrupted lifecycle resumed or retained its lock
+tests/fm-afk-pi-herdr-return-e2e.test.sh	gate-skips here: set FM_AFK_PI_HERDR_E2E=1 to run the real Pi/Herdr away-return regression
+tests/fm-arm-pretool-check.test.sh	fails on Windows:  D01 via codex must deny, got exit 0
+tests/fm-backend-autodetect-smoke.test.sh	fails on Windows:  fm-spawn.sh did not succeed auto-detecting herdr
+tests/fm-backend-cmux-smoke.test.sh	gate-skips here: cmux CLI not found on PATH or at the bundle path
+tests/fm-backend-cmux.test.sh	fails on Windows:  capture should trim to the last N lines locally, got 'line three
+tests/fm-backend-herdr-eventwait-smoke.test.sh	gate-skips here: this herdr build is below the events.subscribe capability (protocol < 16 or events surface absent)
+tests/fm-backend-herdr-presentation-e2e.test.sh	fails on Windows:  flag-off anchor spawn failed: 🌳 Setting up worktree...
+tests/fm-backend-herdr-prune-safety-e2e.test.sh	fails on Windows:  the live heartbeat process did not start writing its marker file
+tests/fm-backend-herdr-smoke.test.sh	herdr does not report foreground_cwd on Windows (docs/windows-gitbash.md)
+tests/fm-backend-herdr-workspace-per-home-e2e.test.sh	fails on Windows:  primary-shaped crewmate spawn failed
+tests/fm-backend-herdr.test.sh	fails on Windows:  create_task should close-and-replace all same-labeled husks after cre
+tests/fm-backend-tmux-smoke.test.sh	gate-skips here: tmux not found
+tests/fm-backend-zellij-smoke.test.sh	gate-skips here: zellij not found
+tests/fm-backend-orca.test.sh	passes on a developer Windows box but fails Orca scout teardown on the CI windows runner; promote only once both agree
+tests/fm-backend-zellij.test.sh	passes on a developer Windows box but fails zellij scout teardown on the CI windows runner; promote only once both agree
+tests/fm-backend.test.sh	known pre-existing symlinked-prefix gap; green on ubuntu
+tests/fm-bearings-snapshot.test.sh	fails on Windows:  stale parent Phase 7 event overrode authoritative Domain Alpha state:
+tests/fm-bootstrap.test.sh	fixture PATH lacks git; bootstrap itself finds git correctly outside the fixture
+tests/fm-cd-pretool-check.test.sh	fails on Windows:  transport must fail open when node is unavailable: expected exit 0, g
+tests/fm-claude-stop-autoarm-live-e2e.test.sh	gate-skips here: set FM_CLAUDE_LIVE_E2E=1 to run the Claude Stop auto-arm regression
+tests/fm-codex-continuity-live-e2e.test.sh	gate-skips here: set FM_CODEX_LIVE_E2E=1 to run the Codex continuity regression
+tests/fm-composer-lib.test.sh	fails on Windows:  the idle placeholder after a glyph should read empty, got 'pending'
+tests/fm-crew-state.test.sh	fails on Windows:  timed-out no-mistakes falls back to pane (missing: 'state: working')
+tests/fm-daemon.test.sh	asserts on a chmod-unwritable directory; NTFS does not honour that
+tests/fm-decision-hold-lifecycle.test.sh	FAILS consistently on a quiet machine; its earlier pass was measured under load
+tests/fm-documentation-audiences.test.sh	fails on Windows:  repository documentation audience check failed
+tests/fm-ensure-agents-md.test.sh	fails on Windows:  CRLF AGENTS.md injection did not preserve CRLF line endings
+tests/fm-fleet-snapshot-view.test.sh	needs a real tmux, which does not exist on Windows
+tests/fm-fleet-sync.test.sh	fails on Windows:  bootstrap relays the STUCK outcome (missing: 'FLEET_SYNC: stuck-clone
+tests/fm-grok-continuity-live-e2e.test.sh	gate-skips here: set FM_GROK_LIVE_E2E=1 to run the interactive Grok continuity regression
+tests/fm-grok-harness.test.sh	stubs ps to stage a harness; the Windows paths read the process table instead (FM_PLATFORM_*_SNAPSHOT can stage it)
+tests/fm-grok-stop-live-e2e.test.sh	gate-skips here: set FM_GROK_STOP_LIVE_E2E=1 with FM_GROK_NATIVE_BIN and FM_GROK_LEGACY_BIN
+tests/fm-herdr-lab.test.sh	fails on Windows:  timed-out provision must fail: expected exit 1, got 0
+tests/fm-herdr-session-cleanup-e2e.test.sh	fails on Windows:  restored child did not converge to the exact childless idle-shell pro
+tests/fm-herdr-session-cleanup.test.sh	FLAKY here: passed one clean round and failed the next
+tests/fm-kimi-harness.test.sh	fails on Windows:  Kimi hook install refused a realistic config
+tests/fm-opencode-primary-live-e2e.test.sh	gate-skips here: set FM_OPENCODE_LIVE_E2E=1 to run the interactive OpenCode continuity regression
+tests/fm-operational-input.test.sh	fails on Windows:  OpenCode cross-language adapter could not invoke the canonical owner
+tests/fm-pending-reply.test.sh	fails on Windows:  recovery should send after completed turn + grace
+tests/fm-pi-primary-live-e2e.test.sh	gate-skips here: set FM_PI_LIVE_E2E=1 to run the isolated interactive Pi regression
+tests/fm-pi-primary-types.test.sh	gate-skips here: tsc not found for Pi extension typecheck
+tests/fm-pi-watch-extension.test.sh	fails on Windows:  Pi extension must surface an external healthy watcher as an owned-wak
+tests/fm-pr-check-security.test.sh	fails on Windows:  parser accepted a rejected raw-byte URL class
+tests/fm-pr-merge.test.sh	fails on Windows:  records-before-merge: fm-pr-merge should succeed: expected exit 0, go
+tests/fm-quota-array-dispatch.test.sh	fails on Windows:  schema v3 shape fixture is invalid
+tests/fm-secondmate-harness.test.sh	stubs ps to stage a harness; the Windows paths read the process table instead (FM_PLATFORM_*_SNAPSHOT can stage it)
+tests/fm-secondmate-lifecycle-e2e.test.sh	fails on Windows:  secondmate spawn failed
+tests/fm-secondmate-liveness.test.sh	fails on Windows:  a successful missing-window recovery should stay silent by default (u
+tests/fm-secondmate-safety.test.sh	fails on Windows:  fm-pr-check failed under FM_HOME
+tests/fm-secondmate-sync.test.sh	fixture PATH lacks git; bootstrap itself finds git correctly outside the fixture
+tests/fm-send-popup-settle.test.sh	HANGS intermittently: 145s in one clean round, still running after 2h in the next
+tests/fm-send-secondmate-marker-herdr-e2e.test.sh	gate-skips here: set FM_SEND_MARKER_HERDR_E2E=1 to run the real Pi/Herdr secondmate-marker regression
+tests/fm-session-start.test.sh	fails on Windows:  read-only banner did not surface fm-lock.sh's own error text (missing
+tests/fm-sessionstart-nudge.test.sh	fails on Windows:  owned lock nudge must be silent, got: ⁣FIRSTMATE_OP: v1 session-sta
+tests/fm-shared-captain-inheritance.test.sh	asserts on a chmod-unwritable directory; NTFS does not honour that
+tests/fm-spawn-dispatch-profile.test.sh	fails on Windows:  claude spawn without profile flags should succeed: expected exit 0, g
+tests/fm-spawn-worktree-settle.test.sh	fails on Windows:  already-settled pane took 18s to confirm - expected close to the sing
+tests/fm-subagent-pretool-check.test.sh	fails on Windows: the missing-jq transport should fail open but exits 127
+tests/fm-teardown-endpoint-safety.test.sh	fails on Windows:  recorded target pid no longer belongs to the expected child
+tests/fm-teardown.test.sh	fails on Windows:  confirmed exact-pane close did not retire the presentation journal
+tests/fm-test-isolation-proof.test.sh	fails on Windows:  candidate set must exactly match the archived isolation proof
+tests/fm-test-run.test.sh	fails on Windows:  empty valid changed selection must pass
+tests/fm-turnend-guard.test.sh	fails on Windows:  hook must fail open (exit 0) when jq is unavailable: expected exit 0,
+tests/fm-wake-queue.test.sh	fails on Windows:  could not register queue custom check
+tests/fm-watch-checkpoint.test.sh	fails on Windows:  signal checkpoint exit: expected exit 0, got 124
+tests/fm-watch-triage.test.sh	NOT YET MEASURED on Windows
+tests/fm-watcher-lock.test.sh	NOT YET MEASURED on Windows
+tests/fm-x-mode.test.sh	NOT YET MEASURED on Windows
 EOF
 }
 
@@ -578,11 +678,52 @@ run_coverage_guard() {
     fi
   fi
 
-  printf 'FM_TEST_COVERAGE ok total=%s parallel=%s serial=%s herdr=%s\n' \
+  # Windows ledger. Unlike the partition above, the windows-gitbash lane is an
+  # allow-list, so on its own it can never fail because a script is missing from
+  # it - which is exactly how an upstream sync added two tests that landed
+  # outside it with nothing reported. Requiring every test to be in EXACTLY one
+  # of the lane or list_windows_excluded makes that impossible: a new test is
+  # either covered on Windows or carries a written reason it is not.
+  local win_bad win_both win_unclassified win_stale
+  list_windows_gitbash | LC_ALL=C sort -u >"$tmp/win_lane"
+  list_windows_excluded | cut -f1 | LC_ALL=C sort -u >"$tmp/win_excl"
+
+  # A reason is the whole point of the ledger; an entry without one is just an
+  # untracked gap wearing a different hat.
+  win_bad=$(list_windows_excluded | awk -F'\t' 'NF < 2 || $2 ~ /^[[:space:]]*$/ { print $1 }')
+  if [ -n "$win_bad" ]; then
+    log "coverage guard: Windows ledger entries missing a reason:"
+    printf '%s\n' "$win_bad" >&2
+    rm -rf "$tmp"
+    return 1
+  fi
+
+  win_both=$(comm -12 "$tmp/win_lane" "$tmp/win_excl" || true)
+  if [ -n "$win_both" ]; then
+    log "coverage guard: scripts both in the Windows lane and excluded from it:"
+    printf '%s\n' "$win_both" >&2
+    rm -rf "$tmp"
+    return 1
+  fi
+
+  cat "$tmp/win_lane" "$tmp/win_excl" | LC_ALL=C sort -u >"$tmp/win_union"
+  win_unclassified=$(comm -23 "$tmp/all" "$tmp/win_union" || true)
+  win_stale=$(comm -13 "$tmp/all" "$tmp/win_union" || true)
+  if [ -n "$win_unclassified" ] || [ -n "$win_stale" ]; then
+    log "coverage guard: every test must be in the Windows lane or the ledger, with a reason"
+    [ -z "$win_unclassified" ] || { log "in neither (add to one):"; printf '%s\n' "$win_unclassified" >&2; }
+    [ -z "$win_stale" ] || { log "named but no longer exists:"; printf '%s\n' "$win_stale" >&2; }
+    rm -rf "$tmp"
+    return 1
+  fi
+
+  printf 'FM_TEST_COVERAGE ok total=%s parallel=%s serial=%s herdr=%s windows=%s windows_excluded=%s\n' \
     "$(wc -l <"$tmp/all" | tr -d ' ')" \
     "$(wc -l <"$tmp/shards_union" | tr -d ' ')" \
     "$(wc -l <"$tmp/serial" | tr -d ' ')" \
-    "$(wc -l <"$tmp/herdr" | tr -d ' ')"
+    "$(wc -l <"$tmp/herdr" | tr -d ' ')" \
+    "$(wc -l <"$tmp/win_lane" | tr -d ' ')" \
+    "$(wc -l <"$tmp/win_excl" | tr -d ' ')"
   rm -rf "$tmp"
   return 0
 }
