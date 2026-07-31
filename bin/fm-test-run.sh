@@ -304,8 +304,6 @@ list_windows_gitbash() {
 tests/fm-afk-return.test.sh
 tests/fm-ask-user-authority.test.sh
 tests/fm-backend-herdr-respawn-idem-e2e.test.sh
-tests/fm-backend-orca.test.sh
-tests/fm-backend-zellij.test.sh
 tests/fm-backlog-handoff.test.sh
 tests/fm-brief.test.sh
 tests/fm-calm-pi-extension.test.sh
@@ -374,6 +372,8 @@ tests/fm-backend-herdr-workspace-per-home-e2e.test.sh	fails on Windows:  primary
 tests/fm-backend-herdr.test.sh	fails on Windows:  create_task should close-and-replace all same-labeled husks after cre
 tests/fm-backend-tmux-smoke.test.sh	gate-skips here: tmux not found
 tests/fm-backend-zellij-smoke.test.sh	gate-skips here: zellij not found
+tests/fm-backend-orca.test.sh	passes on a developer Windows box but fails Orca scout teardown on the CI windows runner; promote only once both agree
+tests/fm-backend-zellij.test.sh	passes on a developer Windows box but fails zellij scout teardown on the CI windows runner; promote only once both agree
 tests/fm-backend.test.sh	known pre-existing symlinked-prefix gap; green on ubuntu
 tests/fm-bearings-snapshot.test.sh	fails on Windows:  stale parent Phase 7 event overrode authoritative Domain Alpha state:
 tests/fm-bootstrap.test.sh	fixture PATH lacks git; bootstrap itself finds git correctly outside the fixture
@@ -416,7 +416,7 @@ tests/fm-sessionstart-nudge.test.sh	fails on Windows:  owned lock nudge must be 
 tests/fm-shared-captain-inheritance.test.sh	asserts on a chmod-unwritable directory; NTFS does not honour that
 tests/fm-spawn-dispatch-profile.test.sh	fails on Windows:  claude spawn without profile flags should succeed: expected exit 0, g
 tests/fm-spawn-worktree-settle.test.sh	fails on Windows:  already-settled pane took 18s to confirm - expected close to the sing
-tests/fm-subagent-pretool-check.test.sh	fails on Windows:  missing jq transport must fail open, got exit 127: C:/Users/dirkv/App
+tests/fm-subagent-pretool-check.test.sh	fails on Windows: the missing-jq transport should fail open but exits 127
 tests/fm-teardown-endpoint-safety.test.sh	fails on Windows:  recorded target pid no longer belongs to the expected child
 tests/fm-teardown.test.sh	fails on Windows:  confirmed exact-pane close did not retire the presentation journal
 tests/fm-test-isolation-proof.test.sh	fails on Windows:  candidate set must exactly match the archived isolation proof
