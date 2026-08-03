@@ -686,11 +686,17 @@ test_kimi_falls_back_to_expanded_home_binary
 #     the Git installation directory and matched nothing. Measured: the literal
 #     form reports 0 matches on Windows where the same tree yields 1 on Linux,
 #     which made this invariant pass without checking anything on Windows.
+#
+# docs/verification/ is exempt. Those files are captured evidence from real
+# sessions - a recorded socket path with a maintainer's home directory in it IS
+# the evidence, and rewriting it would destroy the thing being evidenced. The
+# check is aimed at developer paths leaking into code and generated config,
+# which is where it has actually caught something.
 test_tracked_files_have_no_user_absolute_paths() {
   local matches
-  matches=$(git -C "$ROOT" grep -n -E "[/]Users/" -- . || true)
+  matches=$(git -C "$ROOT" grep -n -E "[/]Users/" -- . ':!docs/verification/' || true)
   [ -z "$matches" ] || fail "tracked files contain user-specific absolute paths: $matches"
-  pass "repository: tracked files contain no user-specific absolute paths"
+  pass "repository: tracked files outside docs/verification contain no user-specific absolute paths"
 }
 
 test_tracked_files_have_no_user_absolute_paths
